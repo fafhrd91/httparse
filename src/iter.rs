@@ -3,6 +3,7 @@ use core::convert::TryInto;
 
 #[allow(missing_docs)]
 pub struct Bytes<'a> {
+    slice: *const u8,
     start: *const u8,
     end: *const u8,
     /// INVARIANT: start <= cursor && cursor <= end
@@ -22,6 +23,7 @@ impl<'a> Bytes<'a> {
             start,
             end,
             cursor,
+            slice: slice.as_ptr(),
             phantom: core::marker::PhantomData,
         }
     }
@@ -29,6 +31,11 @@ impl<'a> Bytes<'a> {
     #[inline]
     pub fn pos(&self) -> usize {
         self.cursor as usize - self.start as usize
+    }
+
+    #[inline]
+    pub fn slice_pos(&self) -> usize {
+        self.cursor as usize - self.slice as usize
     }
 
     #[inline]

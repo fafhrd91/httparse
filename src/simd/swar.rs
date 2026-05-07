@@ -187,12 +187,15 @@ fn test_is_header_value_block() {
         assert!(is_header_value_block([b; BLOCK_SIZE]), "b={}", b);
     }
     // 127 => false
-    assert!(!is_header_value_block([b'\x7F'; BLOCK_SIZE]), "b={}", b'\x7F');
+    assert!(
+        !is_header_value_block([b'\x7F'; BLOCK_SIZE]),
+        "b={}",
+        b'\x7F'
+    );
     // 128..=255 => true
     for b in 128..=255_u8 {
         assert!(is_header_value_block([b; BLOCK_SIZE]), "b={}", b);
     }
-
 
     #[cfg(target_pointer_width = "64")]
     {
