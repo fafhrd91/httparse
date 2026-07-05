@@ -46,9 +46,9 @@ pub unsafe fn match_header_value_vectored(bytes: &mut Bytes) {
         let advance = match_header_value_char_16_sse(bytes.as_ref());
         bytes.advance(advance);
 
-       if advance != 16 {
+        if advance != 16 {
             return;
-       }
+        }
     }
     super::swar::match_header_value_vectored(bytes);
 }
@@ -91,10 +91,11 @@ fn sse_code_matches_uri_chars_table() {
     unsafe {
         assert!(byte_is_allowed(b'_', match_uri_vectored));
 
-        for (b, allowed) in crate::URI_MAP.iter().cloned().enumerate() {
+        for (b, allowed) in crate::utils::URI_MAP.iter().copied().enumerate() {
             assert_eq!(
-                byte_is_allowed(b as u8, match_uri_vectored), allowed,
-                "byte_is_allowed({:?}) should be {:?}", b, allowed,
+                byte_is_allowed(b as u8, match_uri_vectored),
+                allowed,
+                "byte_is_allowed({b:?}) should be {allowed:?}"
             );
         }
     }
@@ -110,10 +111,11 @@ fn sse_code_matches_header_value_chars_table() {
     unsafe {
         assert!(byte_is_allowed(b'_', match_header_value_vectored));
 
-        for (b, allowed) in crate::HEADER_VALUE_MAP.iter().cloned().enumerate() {
+        for (b, allowed) in crate::utils::HEADER_VALUE_MAP.iter().copied().enumerate() {
             assert_eq!(
-                byte_is_allowed(b as u8, match_header_value_vectored), allowed,
-                "byte_is_allowed({:?}) should be {:?}", b, allowed,
+                byte_is_allowed(b as u8, match_header_value_vectored),
+                allowed,
+                "byte_is_allowed({b:?}) should be {allowed:?}"
             );
         }
     }
@@ -123,10 +125,8 @@ fn sse_code_matches_header_value_chars_table() {
 #[cfg(test)]
 unsafe fn byte_is_allowed(byte: u8, f: unsafe fn(bytes: &mut Bytes<'_>)) -> bool {
     let slice = [
-        b'_', b'_', b'_', b'_',
-        b'_', b'_', b'_', b'_',
-        b'_', b'_', byte, b'_',
-        b'_', b'_', b'_', b'_',
+        b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', byte, b'_', b'_', b'_', b'_',
+        b'_',
     ];
     let mut bytes = Bytes::new(&slice);
 

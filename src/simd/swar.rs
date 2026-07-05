@@ -1,6 +1,6 @@
 /// SWAR: SIMD Within A Register
 /// SIMD validator backend that validates register-sized chunks of data at a time.
-use crate::{is_header_name_token, is_header_value_token, is_uri_token, Bytes};
+use crate::{Bytes, utils};
 
 // Adapt block-size to match native register size, i.e: 32bit => 4, 64bit => 8
 const BLOCK_SIZE: usize = core::mem::size_of::<usize>();
@@ -9,7 +9,7 @@ type ByteBlock = [u8; BLOCK_SIZE];
 #[inline]
 pub fn match_uri_vectored(bytes: &mut Bytes) {
     loop {
-        if let Some(bytes8) = bytes.peek_n::<ByteBlock>(BLOCK_SIZE) {
+        if let Some(bytes8) = bytes.peek_n::<BLOCK_SIZE>() {
             let n = match_uri_char_8_swar(bytes8);
             // SAFETY: using peek_n to retrieve the bytes ensures that there are at least n more bytes
             // in `bytes`, so calling `advance(n)` is safe.
@@ -20,15 +20,15 @@ pub fn match_uri_vectored(bytes: &mut Bytes) {
                 continue;
             }
         }
-        if let Some(b) = bytes.peek() {
-            if is_uri_token(b) {
-                // SAFETY: using peek to retrieve the byte ensures that there is at least 1 more byte
-                // in bytes, so calling advance is safe.
-                unsafe {
-                    bytes.advance(1);
-                }
-                continue;
+        if let Some(b) = bytes.peek()
+            && utils::is_uri_token(b)
+        {
+            // SAFETY: using peek to retrieve the byte ensures that there is at least 1 more byte
+            // in bytes, so calling advance is safe.
+            unsafe {
+                bytes.advance(1);
             }
+            continue;
         }
         break;
     }
@@ -37,7 +37,7 @@ pub fn match_uri_vectored(bytes: &mut Bytes) {
 #[inline]
 pub fn match_header_value_vectored(bytes: &mut Bytes) {
     loop {
-        if let Some(bytes8) = bytes.peek_n::<ByteBlock>(BLOCK_SIZE) {
+        if let Some(bytes8) = bytes.peek_n::<BLOCK_SIZE>() {
             let n = match_header_value_char_8_swar(bytes8);
             // SAFETY: using peek_n to retrieve the bytes ensures that there are at least n more bytes
             // in `bytes`, so calling `advance(n)` is safe.
@@ -48,15 +48,15 @@ pub fn match_header_value_vectored(bytes: &mut Bytes) {
                 continue;
             }
         }
-        if let Some(b) = bytes.peek() {
-            if is_header_value_token(b) {
-                // SAFETY: using peek to retrieve the byte ensures that there is at least 1 more byte
-                // in bytes, so calling advance is safe.
-                unsafe {
-                    bytes.advance(1);
-                }
-                continue;
+        if let Some(b) = bytes.peek()
+            && utils::is_header_value_token(b)
+        {
+            // SAFETY: using peek to retrieve the byte ensures that there is at least 1 more byte
+            // in bytes, so calling advance is safe.
+            unsafe {
+                bytes.advance(1);
             }
+            continue;
         }
         break;
     }
@@ -64,8 +64,8 @@ pub fn match_header_value_vectored(bytes: &mut Bytes) {
 
 #[inline]
 pub fn match_header_name_vectored(bytes: &mut Bytes) {
-    while let Some(block) = bytes.peek_n::<ByteBlock>(BLOCK_SIZE) {
-        let n = match_block(is_header_name_token, block);
+    while let Some(block) = bytes.peek_n::<BLOCK_SIZE>() {
+        let n = match_block(utils::is_header_name_token, block);
         // SAFETY: using peek_n to retrieve the bytes ensures that there are at least n more bytes
         // in `bytes`, so calling `advance(n)` is safe.
         unsafe {
@@ -77,7 +77,7 @@ pub fn match_header_name_vectored(bytes: &mut Bytes) {
     }
     // SAFETY: match_tail processes at most the remaining data in `bytes`. advances `bytes` to the
     // end, but no further.
-    unsafe { bytes.advance(match_tail(is_header_name_token, bytes.as_ref())) };
+    unsafe { bytes.advance(match_tail(utils::is_header_name_token, bytes.as_ref())) };
 }
 
 // Matches "tail", i.e: when we have <BLOCK_SIZE bytes in the buffer, should be uncommon
@@ -180,19 +180,22 @@ fn test_is_header_value_block() {
 
     // 0..32 => false
     for b in 0..32_u8 {
-        assert!(!is_header_value_block([b; BLOCK_SIZE]), "b={}", b);
+        assert!(!is_header_value_block([b; BLOCK_SIZE]), "b={b}");
     }
     // 32..=126 => true
     for b in 32..=126_u8 {
-        assert!(is_header_value_block([b; BLOCK_SIZE]), "b={}", b);
+        assert!(is_header_value_block([b; BLOCK_SIZE]), "b={b}");
     }
     // 127 => false
-    assert!(!is_header_value_block([b'\x7F'; BLOCK_SIZE]), "b={}", b'\x7F');
+    assert!(
+        !is_header_value_block([b'\x7F'; BLOCK_SIZE]),
+        "b={}",
+        b'\x7F'
+    );
     // 128..=255 => true
     for b in 128..=255_u8 {
-        assert!(is_header_value_block([b; BLOCK_SIZE]), "b={}", b);
+        assert!(is_header_value_block([b; BLOCK_SIZE]), "b={b}");
     }
-
 
     #[cfg(target_pointer_width = "64")]
     {
@@ -208,17 +211,17 @@ fn test_is_uri_block() {
 
     // 0..33 => false
     for b in 0..33_u8 {
-        assert!(!is_uri_block([b; BLOCK_SIZE]), "b={}", b);
+        assert!(!is_uri_block([b; BLOCK_SIZE]), "b={b}");
     }
     // 33..=126 => true
     for b in 33..=126_u8 {
-        assert!(is_uri_block([b; BLOCK_SIZE]), "b={}", b);
+        assert!(is_uri_block([b; BLOCK_SIZE]), "b={b}");
     }
     // 127 => false
     assert!(!is_uri_block([b'\x7F'; BLOCK_SIZE]), "b={}", b'\x7F');
     // 128..=255 => true
     for b in 128..=255_u8 {
-        assert!(is_uri_block([b; BLOCK_SIZE]), "b={}", b);
+        assert!(is_uri_block([b; BLOCK_SIZE]), "b={b}");
     }
 }
 

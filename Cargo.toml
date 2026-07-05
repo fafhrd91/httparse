@@ -1,20 +1,23 @@
 [package]
-name = "httparse"
-version = "1.10.1"
-authors = ["Sean McArthur <sean@seanmonstar.com>"]
+name = "ntex-httparse"
+version = "1.10.3"
+authors = ["Nikolay Kim <fafhrd91@gmail.com>", "Sean McArthur <sean@seanmonstar.com>"]
 license = "MIT OR Apache-2.0"
 description = "A tiny, safe, speedy, zero-copy HTTP/1.x parser."
-repository = "https://github.com/seanmonstar/httparse"
+repository = "https://github.com/fafhrd91/httparse"
 documentation = "https://docs.rs/httparse"
 readme = "README.md"
 keywords = ["http", "parser", "no_std"]
 categories = ["network-programming", "no-std", "parser-implementations", "web-programming"]
-edition = "2021"
-rust-version = "1.59"
+edition = "2024"
+rust-version = "1.88"
 
 [features]
 default = ["std"]
 std = []
+
+[dependencies]
+simdutf8 = "0.1.5"
 
 [dev-dependencies]
 criterion = { version = "0.3.5", features = ["html_reports"] }

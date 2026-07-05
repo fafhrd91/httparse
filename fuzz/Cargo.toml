@@ -1,4 +1,3 @@
-
 [package]
 name = "httparse-fuzz"
 version = "0.0.0"
@@ -12,7 +11,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4.0"
 
-[dependencies.httparse]
+[dependencies.ntex-httparse]
 path = ".."
 
 # Prevent this from interfering with workspaces
@@ -40,17 +39,5 @@ doc = false
 [[bin]]
 name = "parse_response"
 path = "fuzz_targets/parse_response.rs"
-test = false
-doc = false
-
-[[bin]]
-name = "parse_response_multspaces"
-path = "fuzz_targets/parse_response_multspaces.rs"
-test = false
-doc = false
-
-[[bin]]
-name = "parse_request_multspaces"
-path = "fuzz_targets/parse_request_multspaces.rs"
 test = false
 doc = false
