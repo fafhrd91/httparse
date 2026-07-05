@@ -36,60 +36,15 @@ use core::{fmt, result, str};
 mod iter;
 #[macro_use]
 mod macros;
+mod headers;
 mod simd;
+mod utils;
+mod version;
+
+pub use crate::headers::{Header, HeaderParsed};
+pub use crate::version::parse_version;
 
 use crate::iter::Bytes;
-
-/// Determines if byte is a method token char.
-///
-/// > ```notrust
-/// > token          = 1*tchar
-/// >
-/// > tchar          = "!" / "#" / "$" / "%" / "&" / "'" / "*"
-/// >                / "+" / "-" / "." / "^" / "_" / "`" / "|" / "~"
-/// >                / DIGIT / ALPHA
-/// >                ; any VCHAR, except delimiters
-/// > ```
-#[inline]
-fn is_method_token(b: u8) -> bool {
-    match b {
-        // For the majority case, this can be faster than the table lookup.
-        b'A'..=b'Z' => true,
-        _ => TOKEN_MAP[b as usize],
-    }
-}
-
-// char codes to accept URI string.
-// i.e. b'!' <= char and char != 127
-// TODO: Make a stricter checking for URI string?
-static URI_MAP: [bool; 256] = byte_map!(
-    b'!'..=0x7e | 0x80..=0xFF
-);
-
-#[inline]
-pub(crate) fn is_uri_token(b: u8) -> bool {
-    URI_MAP[b as usize]
-}
-
-static TOKEN_MAP: [bool; 256] = byte_map!(
-    b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' |
-    b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' |  b'*' | b'+' |
-    b'-' | b'.' | b'^' | b'_' | b'`' | b'|' | b'~'
-);
-
-#[inline]
-pub(crate) fn is_header_name_token(b: u8) -> bool {
-    TOKEN_MAP[b as usize]
-}
-
-static HEADER_VALUE_MAP: [bool; 256] = byte_map!(
-    b'\t' | b' '..=0x7e | 0x80..=0xFF
-);
-
-#[inline]
-pub(crate) fn is_header_value_token(b: u8) -> bool {
-    HEADER_VALUE_MAP[b as usize]
-}
 
 /// An error in parsing.
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -199,49 +154,6 @@ impl<T> Status<T> {
     }
 }
 
-#[inline]
-fn skip_empty_lines(bytes: &mut Bytes<'_>) -> Result<()> {
-    loop {
-        let b = bytes.peek();
-        match b {
-            Some(b'\r') => {
-                // SAFETY: peeked and found `\r`, so it's safe to bump 1 pos
-                unsafe { bytes.bump() };
-                expect!(bytes.next() == b'\n' => Err(Error::NewLine));
-            }
-            Some(b'\n') => {
-                // SAFETY: peeked and found `\n`, so it's safe to bump 1 pos
-                unsafe {
-                    bytes.bump();
-                }
-            }
-            Some(..) => {
-                bytes.slice();
-                return Ok(Status::Complete(()));
-            }
-            None => return Ok(Status::Partial),
-        }
-    }
-}
-
-#[inline]
-fn skip_spaces(bytes: &mut Bytes<'_>) -> Result<()> {
-    loop {
-        let b = bytes.peek();
-        match b {
-            Some(b' ') => {
-                // SAFETY: peeked and found ` `, so it's safe to bump 1 pos
-                unsafe { bytes.bump() };
-            }
-            Some(..) => {
-                bytes.slice();
-                return Ok(Status::Complete(()));
-            }
-            None => return Ok(Status::Partial),
-        }
-    }
-}
-
 /// A parsed Request.
 ///
 /// # Example
@@ -273,139 +185,66 @@ impl<'a> Request<'a> {
 
         self.method = complete!(parse_method_inner(&mut bytes));
         self.path = complete!(parse_uri_inner(&mut bytes));
-        self.version = complete!(parse_version_inner(&mut bytes));
+        self.version = complete!(version::parse_version_inner(&mut bytes));
 
         newline!(bytes);
         Ok(Status::Complete(bytes.slice_pos()))
     }
 }
 
-#[inline]
-/// Parse response code and reason
-pub fn parse_response(buf: &[u8]) -> Result<(usize, u8, u16, &str)> {
-    let mut bytes = Bytes::new(buf);
-
-    complete!(skip_empty_lines(&mut bytes));
-    let version = complete!(parse_version_inner(&mut bytes));
-    complete!(skip_empty_lines(&mut bytes));
-    space!(bytes or Error::Version);
-    complete!(skip_spaces(&mut bytes));
-    let code = complete!(parse_code(&mut bytes));
-
-    // RFC7230 says there must be 'SP' and then reason-phrase, but admits
-    // its only for legacy reasons. With the reason-phrase completely
-    // optional (and preferred to be omitted) in HTTP2, we'll just
-    // handle any response that doesn't include a reason-phrase, because
-    // it's more lenient, and we don't care anyways.
-    //
-    // So, a SP means parse a reason-phrase.
-    // A newline means go to headers.
-    // Anything else we'll say is a malformed status.
-    let reason = match next!(bytes) {
-        b' ' => {
-            complete!(skip_spaces(&mut bytes));
-            bytes.slice();
-            complete!(parse_reason(&mut bytes))
-        }
-        b'\r' => {
-            expect!(bytes.next() == b'\n' => Err(Error::Status));
-            bytes.slice();
-            ""
-        }
-        b'\n' => {
-            bytes.slice();
-            ""
-        }
-        _ => return Err(Error::Status),
-    };
-
-    Ok(Status::Complete((bytes.slice_pos(), version, code, reason)))
+/// A parsed Response.
+#[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
+pub struct Response<'a> {
+    /// Parsed response's http version.
+    pub version: u8,
+    /// Parsed response's code.
+    pub code: u16,
+    /// Parsed response's reason.
+    pub reason: &'a str,
 }
 
-/// Represents a parsed header.
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
-pub struct Header {
-    /// The name portion of a header.
-    ///
-    /// A header name must be valid ASCII-US, so it's safe to store as a `&str`.
-    pub name_start: usize,
-    pub name_end: usize,
-    /// The value portion of a header.
-    ///
-    /// While headers **should** be ASCII-US, the specification allows for
-    /// values that may not be, and so the value is stored as bytes.
-    pub value_start: usize,
-    pub value_end: usize,
-}
-
-/// Header parse result result.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum HeaderParsed {
-    Header(usize),
-    Eof(usize),
-}
-
-impl Header {
-    /// Parse a buffer of bytes as header.
-    ///
-    /// The return value, if complete and successful, includes the index of the
-    /// buffer that parsing stopped at, and a sliced reference to the parsed
-    /// headers. The length of the slice will be equal to the number of properly
-    /// parsed headers.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use ntex_httparse::{Status, Header, HeaderParsed};
-    ///
-    /// let buf = b"Host: foo.bar\nAccept: */*\n\nblah blah";
-    /// let mut header = Header::default();
-    /// assert_eq!(header.parse(buf), Ok(Status::Complete(HeaderParsed::Header(14))));
-    /// ```
-    pub fn parse(&mut self, src: &[u8]) -> Result<HeaderParsed> {
+impl<'a> Response<'a> {
+    #[inline]
+    /// Parse response code and reason
+    pub fn parse(&mut self, src: &'a [u8]) -> Result<usize> {
         let mut bytes = Bytes::new(src);
-        parse_header_iter_uninit(&mut bytes, self)
-    }
-}
 
-#[inline]
-#[allow(missing_docs)]
-// WARNING: Exported for internal benchmarks, not fit for public consumption
-pub fn parse_version(src: &[u8]) -> Result<u8> {
-    let mut bytes = Bytes::new(src);
-    parse_version_inner(&mut bytes)
-}
+        complete!(utils::skip_empty_lines(&mut bytes));
+        self.version = complete!(version::parse_version_inner(&mut bytes));
+        complete!(utils::skip_empty_lines(&mut bytes));
+        space!(bytes or Error::Version);
+        complete!(utils::skip_spaces(&mut bytes));
+        self.code = complete!(parse_code(&mut bytes));
 
-#[inline]
-#[allow(missing_docs)]
-// WARNING: Exported for internal benchmarks, not fit for public consumption
-fn parse_version_inner(bytes: &mut Bytes<'_>) -> Result<u8> {
-    if let Some(eight) = bytes.peek_n::<8>() {
-        const H10: u64 = u64::from_ne_bytes(*b"HTTP/1.0");
-        const H11: u64 = u64::from_ne_bytes(*b"HTTP/1.1");
-        // SAFETY: peek_n before ensures within bounds
-        unsafe {
-            bytes.advance(8);
-        }
-        return match u64::from_ne_bytes(eight) {
-            H10 => Ok(Status::Complete(0)),
-            H11 => Ok(Status::Complete(1)),
-            _ => Err(Error::Version),
+        // RFC7230 says there must be 'SP' and then reason-phrase, but admits
+        // its only for legacy reasons. With the reason-phrase completely
+        // optional (and preferred to be omitted) in HTTP2, we'll just
+        // handle any response that doesn't include a reason-phrase, because
+        // it's more lenient, and we don't care anyways.
+        //
+        // So, a SP means parse a reason-phrase.
+        // A newline means go to headers.
+        // Anything else we'll say is a malformed status.
+        self.reason = match next!(bytes) {
+            b' ' => {
+                complete!(utils::skip_spaces(&mut bytes));
+                bytes.slice();
+                complete!(parse_reason(&mut bytes))
+            }
+            b'\r' => {
+                expect!(bytes.next() == b'\n' => Err(Error::Status));
+                bytes.slice();
+                ""
+            }
+            b'\n' => {
+                bytes.slice();
+                ""
+            }
+            _ => return Err(Error::Status),
         };
+
+        Ok(Status::Complete(bytes.slice_pos()))
     }
-
-    // else (but not in `else` because of borrow checker)
-
-    // If there aren't at least 8 bytes, we still want to detect early
-    // if this is a valid version or not. If it is, we'll return Partial.
-    expect!(bytes.next() == b'H' => Err(Error::Version));
-    expect!(bytes.next() == b'T' => Err(Error::Version));
-    expect!(bytes.next() == b'T' => Err(Error::Version));
-    expect!(bytes.next() == b'P' => Err(Error::Version));
-    expect!(bytes.next() == b'/' => Err(Error::Version));
-    expect!(bytes.next() == b'1' => Err(Error::Version));
-    expect!(bytes.next() == b'.' => Err(Error::Version));
-    Ok(Status::Partial)
 }
 
 #[inline]
@@ -421,7 +260,7 @@ fn parse_method_inner<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
     const GET: [u8; 4] = *b"GET ";
     const POST: [u8; 4] = *b"POST";
 
-    complete!(skip_empty_lines(bytes));
+    complete!(utils::skip_empty_lines(bytes));
 
     match bytes.peek_n::<4>() {
         Some(GET) => {
@@ -430,7 +269,7 @@ fn parse_method_inner<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
                 bytes.advance(4); // advance cursor past "GET "
                 str::from_utf8_unchecked(bytes.slice_skip(1)) // "GET" without space
             };
-            complete!(skip_spaces(bytes));
+            complete!(utils::skip_spaces(bytes));
             Ok(Status::Complete(method))
         }
         // SAFETY:
@@ -444,7 +283,7 @@ fn parse_method_inner<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
                 bytes.advance(5); // advance cursor past "POST "
                 str::from_utf8_unchecked(bytes.slice_skip(1)) // "POST" without space
             };
-            complete!(skip_spaces(bytes));
+            complete!(utils::skip_spaces(bytes));
             Ok(Status::Complete(method))
         }
         _ => parse_token(bytes),
@@ -515,7 +354,7 @@ fn parse_reason<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
 #[inline]
 fn parse_token<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
     let b = next!(bytes);
-    if !is_method_token(b) {
+    if !utils::is_method_token(b) {
         // First char must be a token char, it can't be a space which would indicate an empty token.
         return Err(Error::Token);
     }
@@ -527,7 +366,7 @@ fn parse_token<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
                 // SAFETY: all bytes up till `i` must have been `is_method_token` and therefore also utf-8.
                 unsafe { str::from_utf8_unchecked(bytes.slice_skip(1)) },
             ));
-        } else if !is_method_token(b) {
+        } else if !utils::is_method_token(b) {
             return Err(Error::Token);
         }
     }
@@ -557,7 +396,7 @@ fn parse_uri_inner<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
         // SAFETY: all bytes up till `i` must have been `is_token` and therefore also utf-8.
         match str::from_utf8(unsafe { bytes.slice_skip(1) }) {
             Ok(uri) => {
-                complete!(skip_spaces(bytes));
+                complete!(utils::skip_spaces(bytes));
                 Ok(Status::Complete(uri))
             }
             Err(_) => Err(Error::Token),
@@ -576,100 +415,6 @@ fn parse_code(bytes: &mut Bytes<'_>) -> Result<u16> {
     Ok(Status::Complete(
         (hundreds - b'0') as u16 * 100 + (tens - b'0') as u16 * 10 + (ones - b'0') as u16,
     ))
-}
-
-/* Function which parsers headers into uninitialized buffer.
- *
- * Guarantees that it doesn't write garbage, so casting
- * &mut &mut [Header] -> &mut &mut [MaybeUninit<Header>]
- * is safe here.
- *
- * Also it promises `headers` get shrunk to number of initialized headers,
- * so casting the other way around after calling this function is safe
- */
-fn parse_header_iter_uninit(bytes: &mut Bytes<'_>, header: &mut Header) -> Result<HeaderParsed> {
-    // Track starting pointer to calculate the number of bytes parsed.
-    let start = bytes.as_ref().as_ptr() as usize;
-
-    // a newline here means the head is over!
-    let b = next!(bytes);
-    if b == b'\r' {
-        expect!(bytes.next() == b'\n' => Err(Error::NewLine));
-        let end = bytes.as_ref().as_ptr() as usize;
-        return Ok(Status::Complete(HeaderParsed::Eof(end - start)));
-    } else if b == b'\n' {
-        let end = bytes.as_ref().as_ptr() as usize;
-        return Ok(Status::Complete(HeaderParsed::Eof(end - start)));
-    }
-
-    // parse header name until colon
-    {
-        if !is_header_name_token(b) {
-            return Err(Error::HeaderName);
-        }
-        header.name_start = bytes.slice_pos() - 1;
-
-        simd::match_header_name_vectored(bytes);
-        if next!(bytes) == b':' {
-            // SAFETY: previously bumped by 1 with next! -> always safe.
-            header.name_end = bytes.slice_pos() - 1;
-            bytes.commit();
-        } else {
-            return Err(Error::HeaderName);
-        }
-    }
-
-    let mut b;
-
-    // eat white space between colon and value
-    'whitespace_after_colon: loop {
-        b = next!(bytes);
-        if b == b' ' || b == b'\t' {
-            bytes.commit();
-            continue 'whitespace_after_colon;
-        }
-        if is_header_value_token(b) {
-            header.value_start = bytes.slice_pos() - 1;
-            break 'whitespace_after_colon;
-        }
-
-        if b == b'\r' {
-            expect!(bytes.next() == b'\n' => Err(Error::HeaderValue));
-        } else if b != b'\n' {
-            return Err(Error::HeaderValue);
-        }
-        bytes.commit();
-
-        // This produces an empty slice that points to the beginning
-        // of the whitespace.
-        header.value_start = bytes.slice_pos();
-        header.value_end = bytes.slice_pos();
-        return Ok(Status::Complete(HeaderParsed::Header(bytes.slice_pos())));
-    }
-
-    // parse value till EOL
-    {
-        simd::match_header_value_vectored(bytes);
-
-        header.value_end = bytes.slice_pos();
-        let value = bytes.slice();
-
-        // check ctl
-        let b = next!(bytes);
-        if b == b'\r' {
-            expect!(bytes.next() == b'\n' => Err(Error::HeaderValue));
-        } else if b != b'\n' {
-            return Err(Error::HeaderValue);
-        }
-
-        // trim trailing whitespace in the header
-        if let Some(last_visible) = value.iter().rposition(|b| *b != b' ' && *b != b'\t') {
-            header.value_end = header.value_start + last_visible + 1;
-        }
-        bytes.commit();
-    }
-
-    Ok(Status::Complete(HeaderParsed::Header(bytes.slice_pos())))
 }
 
 /// Parse a buffer of bytes as a chunk size.

@@ -1,6 +1,6 @@
 /// SWAR: SIMD Within A Register
 /// SIMD validator backend that validates register-sized chunks of data at a time.
-use crate::{Bytes, is_header_name_token, is_header_value_token, is_uri_token};
+use crate::{Bytes, utils};
 
 // Adapt block-size to match native register size, i.e: 32bit => 4, 64bit => 8
 const BLOCK_SIZE: usize = core::mem::size_of::<usize>();
@@ -21,7 +21,7 @@ pub fn match_uri_vectored(bytes: &mut Bytes) {
             }
         }
         if let Some(b) = bytes.peek()
-            && is_uri_token(b)
+            && utils::is_uri_token(b)
         {
             // SAFETY: using peek to retrieve the byte ensures that there is at least 1 more byte
             // in bytes, so calling advance is safe.
@@ -49,7 +49,7 @@ pub fn match_header_value_vectored(bytes: &mut Bytes) {
             }
         }
         if let Some(b) = bytes.peek()
-            && is_header_value_token(b)
+            && utils::is_header_value_token(b)
         {
             // SAFETY: using peek to retrieve the byte ensures that there is at least 1 more byte
             // in bytes, so calling advance is safe.
@@ -65,7 +65,7 @@ pub fn match_header_value_vectored(bytes: &mut Bytes) {
 #[inline]
 pub fn match_header_name_vectored(bytes: &mut Bytes) {
     while let Some(block) = bytes.peek_n::<BLOCK_SIZE>() {
-        let n = match_block(is_header_name_token, block);
+        let n = match_block(utils::is_header_name_token, block);
         // SAFETY: using peek_n to retrieve the bytes ensures that there are at least n more bytes
         // in `bytes`, so calling `advance(n)` is safe.
         unsafe {
@@ -77,7 +77,7 @@ pub fn match_header_name_vectored(bytes: &mut Bytes) {
     }
     // SAFETY: match_tail processes at most the remaining data in `bytes`. advances `bytes` to the
     // end, but no further.
-    unsafe { bytes.advance(match_tail(is_header_name_token, bytes.as_ref())) };
+    unsafe { bytes.advance(match_tail(utils::is_header_name_token, bytes.as_ref())) };
 }
 
 // Matches "tail", i.e: when we have <BLOCK_SIZE bytes in the buffer, should be uncommon
