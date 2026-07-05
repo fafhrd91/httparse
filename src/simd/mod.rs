@@ -1,3 +1,13 @@
+#![allow(
+    unsafe_op_in_unsafe_fn,
+    clippy::inline_always,
+    clippy::wildcard_imports,
+    clippy::items_after_statements,
+    clippy::cast_possible_truncation,
+    clippy::cast_ptr_alignment,
+    clippy::cast_sign_loss,
+    clippy::ptr_as_ptr
+)]
 mod swar;
 
 #[cfg(any(
@@ -28,7 +38,7 @@ mod sse42;
     not(any(httparse_disable_simd, miri)),
     any(
         target_feature = "avx2",
-        all(feature = "std", not(target_feature = "sse4.2"),),
+        all(feature = "std", not(target_feature = "sse4.2"),)
     ),
     any(target_arch = "x86", target_arch = "x86_64",),
 ))]

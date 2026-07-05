@@ -1,6 +1,7 @@
-use std::time::Duration;
+use std::{hint::black_box, time::Duration};
 
-use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion, Throughput};
+use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
+use ntex_httparse::{Header, HeaderParsed, Request};
 
 const REQ_SHORT: &[u8] = b"\
 GET / HTTP/1.0\r\n\
@@ -25,17 +26,30 @@ fn req(c: &mut Criterion) {
         .bench_function("req", |b| {
             b.iter_batched_ref(
                 || {
-                    [httparse::Header {
-                        name: "",
-                        value: &[],
-                    }; 16]
+                    (
+                        Request::default(),
+                        [Header {
+                            name_start: 0,
+                            name_end: 0,
+                            value_start: 0,
+                            value_end: 0,
+                        }; 16],
+                    )
                 },
-                |headers| {
-                    let mut req = httparse::Request::new(headers);
-                    assert_eq!(
-                        black_box(req.parse(REQ).unwrap()),
-                        httparse::Status::Complete(REQ.len())
-                    );
+                |(req, headers)| {
+                    let mut consumed = black_box(req.parse(REQ).unwrap().unwrap());
+                    for item in headers {
+                        match black_box(item.parse(&REQ[consumed..]).unwrap().unwrap()) {
+                            HeaderParsed::Header(l) => {
+                                consumed += l;
+                            }
+                            HeaderParsed::Eof(l) => {
+                                consumed += l;
+                                break;
+                            }
+                        }
+                    }
+                    assert_eq!(consumed, REQ.len());
                 },
                 BatchSize::SmallInput,
             )
@@ -48,97 +62,105 @@ fn req_short(c: &mut Criterion) {
         .bench_function("req_short", |b| {
             b.iter_batched_ref(
                 || {
-                    [httparse::Header {
-                        name: "",
-                        value: &[],
+                    [Header {
+                        name_start: 0,
+                        name_end: 0,
+                        value_start: 0,
+                        value_end: 0,
                     }; 16]
                 },
                 |headers| {
-                    let mut req = httparse::Request::new(headers);
-                    assert_eq!(
-                        req.parse(black_box(REQ_SHORT)).unwrap(),
-                        httparse::Status::Complete(REQ_SHORT.len())
-                    );
+                    let mut req = Request::default();
+                    let mut consumed = black_box(req.parse(REQ_SHORT).unwrap().unwrap());
+                    for item in headers {
+                        match black_box(item.parse(&REQ_SHORT[consumed..]).unwrap().unwrap()) {
+                            HeaderParsed::Header(l) => {
+                                consumed += l;
+                            }
+                            HeaderParsed::Eof(l) => {
+                                consumed += l;
+                                break;
+                            }
+                        }
+                    }
+                    assert_eq!(consumed, REQ_SHORT.len());
                 },
                 BatchSize::SmallInput,
             )
         });
 }
 
-const RESP_SHORT: &[u8] = b"\
-HTTP/1.0 200 OK\r\n\
-Date: Wed, 21 Oct 2015 07:28:00 GMT\r\n\
-Set-Cookie: session=60; user_id=1\r\n\r\n";
+// const RESP_SHORT: &[u8] = b"\
+// HTTP/1.0 200 OK\r\n\
+// Date: Wed, 21 Oct 2015 07:28:00 GMT\r\n\
+// Set-Cookie: session=60; user_id=1\r\n\r\n";
 
 // These particular headers don't all make semantic sense for a response, but they're syntactically valid.
-const RESP: &[u8] = b"\
-HTTP/1.1 200 OK\r\n\
-Date: Wed, 21 Oct 2015 07:28:00 GMT\r\n\
-Host: www.kittyhell.com\r\n\
-User-Agent: Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10.6; ja-JP-mac; rv:1.9.2.3) Gecko/20100401 Firefox/3.6.3 Pathtraq/0.9\r\n\
-Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
-Accept-Language: ja,en-us;q=0.7,en;q=0.3\r\n\
-Accept-Encoding: gzip,deflate\r\n\
-Accept-Charset: Shift_JIS,utf-8;q=0.7,*;q=0.7\r\n\
-Keep-Alive: 115\r\n\
-Connection: keep-alive\r\n\
-Cookie: wp_ozh_wsa_visits=2; wp_ozh_wsa_visit_lasttime=xxxxxxxxxx; __utma=xxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.x; __utmz=xxxxxxxxx.xxxxxxxxxx.x.x.utmccn=(referral)|utmcsr=reader.livedoor.com|utmcct=/reader/|utmcmd=referral|padding=under256\r\n\r\n";
+// const RESP: &[u8] = b"\
+// HTTP/1.1 200 OK\r\n\
+// Date: Wed, 21 Oct 2015 07:28:00 GMT\r\n\
+// Host: www.kittyhell.com\r\n\
+// User-Agent: Mozilla/5.0 (Macintosh; U; Intel Mac OS X 10.6; ja-JP-mac; rv:1.9.2.3) Gecko/20100401 Firefox/3.6.3 Pathtraq/0.9\r\n\
+// Accept: text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8\r\n\
+// Accept-Language: ja,en-us;q=0.7,en;q=0.3\r\n\
+// Accept-Encoding: gzip,deflate\r\n\
+// Accept-Charset: Shift_JIS,utf-8;q=0.7,*;q=0.7\r\n\
+// Keep-Alive: 115\r\n\
+// Connection: keep-alive\r\n\
+// Cookie: wp_ozh_wsa_visits=2; wp_ozh_wsa_visit_lasttime=xxxxxxxxxx; __utma=xxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.x; __utmz=xxxxxxxxx.xxxxxxxxxx.x.x.utmccn=(referral)|utmcsr=reader.livedoor.com|utmcct=/reader/|utmcmd=referral|padding=under256\r\n\r\n";
 
-fn resp(c: &mut Criterion) {
-    c.benchmark_group("resp")
-        .throughput(Throughput::Bytes(RESP.len() as u64))
-        .bench_function("resp", |b| {
-            b.iter_batched_ref(
-                || {
-                    [httparse::Header {
-                        name: "",
-                        value: &[],
-                    }; 16]
-                },
-                |headers| {
-                    let mut resp = httparse::Response::new(headers);
-                    assert_eq!(
-                        resp.parse(black_box(RESP)).unwrap(),
-                        httparse::Status::Complete(RESP.len())
-                    );
-                },
-                BatchSize::SmallInput,
-            )
-        });
-}
+// fn resp(c: &mut Criterion) {
+//     c.benchmark_group("resp")
+//         .throughput(Throughput::Bytes(RESP.len() as u64))
+//         .bench_function("resp", |b| {
+//             b.iter_batched_ref(
+//                 || {
+//                     [httparse::Header {
+//                         name: "",
+//                         value: &[],
+//                     }; 16]
+//                 },
+//                 |headers| {
+//                     let mut resp = httparse::Response::new(headers);
+//                     assert_eq!(
+//                         resp.parse(black_box(RESP)).unwrap(),
+//                         httparse::Status::Complete(RESP.len())
+//                     );
+//                 },
+//                 BatchSize::SmallInput,
+//             )
+//         });
+// }
 
-fn resp_short(c: &mut Criterion) {
-    c.benchmark_group("resp_short")
-        .throughput(Throughput::Bytes(RESP_SHORT.len() as u64))
-        .bench_function("resp_short", |b| {
-            b.iter_batched_ref(
-                || {
-                    [httparse::Header {
-                        name: "",
-                        value: &[],
-                    }; 16]
-                },
-                |headers| {
-                    let mut resp = httparse::Response::new(headers);
-                    assert_eq!(
-                        resp.parse(black_box(RESP_SHORT)).unwrap(),
-                        httparse::Status::Complete(RESP_SHORT.len())
-                    );
-                },
-                BatchSize::SmallInput,
-            )
-        });
-}
+// fn resp_short(c: &mut Criterion) {
+//     c.benchmark_group("resp_short")
+//         .throughput(Throughput::Bytes(RESP_SHORT.len() as u64))
+//         .bench_function("resp_short", |b| {
+//             b.iter_batched_ref(
+//                 || {
+//                     [httparse::Header {
+//                         name: "",
+//                         value: &[],
+//                     }; 16]
+//                 },
+//                 |headers| {
+//                     let mut resp = httparse::Response::new(headers);
+//                     assert_eq!(
+//                         resp.parse(black_box(RESP_SHORT)).unwrap(),
+//                         httparse::Status::Complete(RESP_SHORT.len())
+//                     );
+//                 },
+//                 BatchSize::SmallInput,
+//             )
+//         });
+// }
 
 fn uri(c: &mut Criterion) {
     fn _uri(c: &mut Criterion, name: &str, input: &'static [u8]) {
         c.benchmark_group("uri")
             .throughput(Throughput::Bytes(input.len() as u64))
             .bench_function(name, |b| {
-                b.iter(|| {
-                    let mut b = httparse::_benchable::Bytes::new(black_box(input));
-                    httparse::_benchable::parse_uri(&mut b).unwrap()
-                })
+                b.iter(|| black_box(ntex_httparse::parse_uri(input).unwrap()))
             });
     }
 
@@ -163,10 +185,28 @@ fn header(c: &mut Criterion) {
             .throughput(Throughput::Bytes(input.len() as u64))
             .bench_function(name, |b| {
                 b.iter_batched_ref(
-                    || [httparse::EMPTY_HEADER; 128],
+                    || {
+                        [Header {
+                            name_start: 0,
+                            name_end: 0,
+                            value_start: 0,
+                            value_end: 0,
+                        }; 128]
+                    },
                     |headers| {
-                        let status = httparse::parse_headers(black_box(input), headers).unwrap();
-                        black_box(status.unwrap()).0
+                        let mut consumed = 0;
+                        for item in headers {
+                            match black_box(item.parse(&input[consumed..]).unwrap().unwrap()) {
+                                HeaderParsed::Header(l) => {
+                                    consumed += l;
+                                }
+                                HeaderParsed::Eof(l) => {
+                                    consumed += l;
+                                    break;
+                                }
+                            }
+                        }
+                        consumed
                     },
                     BatchSize::SmallInput,
                 )
@@ -209,10 +249,7 @@ fn version(c: &mut Criterion) {
         c.benchmark_group("version")
             .throughput(Throughput::Bytes(input.len() as u64))
             .bench_function(name, |b| {
-                b.iter(|| {
-                    let mut b = httparse::_benchable::Bytes::new(black_box(input));
-                    httparse::_benchable::parse_version(&mut b).unwrap()
-                })
+                b.iter(|| black_box(ntex_httparse::parse_version(input).unwrap()))
             });
     }
 
@@ -226,10 +263,7 @@ fn method(c: &mut Criterion) {
         c.benchmark_group("method")
             .throughput(Throughput::Bytes(input.len() as u64))
             .bench_function(name, |b| {
-                b.iter(|| {
-                    let mut b = httparse::_benchable::Bytes::new(black_box(input));
-                    httparse::_benchable::parse_method(&mut b).unwrap()
-                })
+                b.iter(|| black_box(ntex_httparse::parse_method(input).unwrap()))
             });
     }
 
@@ -250,7 +284,7 @@ fn method(c: &mut Criterion) {
 }
 
 fn many_requests(c: &mut Criterion) {
-    use rand::{rngs::StdRng, seq::SliceRandom, SeedableRng};
+    use rand::{SeedableRng, rngs::StdRng, seq::SliceRandom};
     let mut requests = [
         ("GET", 500),
         ("POST", 300),
@@ -259,7 +293,7 @@ fn many_requests(c: &mut Criterion) {
         ("w3!r`d", 20),
     ]
     .iter()
-    .flat_map(|&(method, count)| std::iter::repeat(method).take(count))
+    .flat_map(|&(method, count)| std::iter::repeat_n(method, count))
     .map(|method| format!("{method} / HTTP/1.1\r\n\r\n"))
     .collect::<Vec<_>>();
     SliceRandom::shuffle(&mut *requests, &mut StdRng::seed_from_u64(0));
@@ -273,8 +307,7 @@ fn many_requests(c: &mut Criterion) {
         .bench_function("_", |b| {
             b.iter(|| {
                 requests.iter().for_each(|req| {
-                    let mut b = httparse::_benchable::Bytes::new(black_box(req.as_bytes()));
-                    httparse::_benchable::parse_method(&mut b).unwrap();
+                    black_box(ntex_httparse::parse_method(req.as_bytes()).unwrap());
                 });
             })
         });
@@ -286,6 +319,7 @@ const SAMPLES: usize = 200;
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(SAMPLES).warm_up_time(WARMUP).measurement_time(MTIME);
-    targets = req, req_short, resp, resp_short, uri, header, version, method, many_requests
+    //targets = req, req_short, resp, resp_short, uri, header, version, method, many_requests
+    targets = req, req_short, uri, header, version, method, many_requests
 }
 criterion_main!(benches);

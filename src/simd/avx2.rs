@@ -13,7 +13,7 @@ pub unsafe fn match_uri_vectored(bytes: &mut Bytes) {
         }
     }
     // NOTE: use SWAR for <32B, more efficient than falling back to SSE4.2
-    super::swar::match_uri_vectored(bytes)
+    super::swar::match_uri_vectored(bytes);
 }
 
 #[inline(always)]
@@ -88,7 +88,7 @@ pub unsafe fn match_header_value_vectored(bytes: &mut Bytes) {
         }
     }
     // NOTE: use SWAR for <32B, more efficient than falling back to SSE4.2
-    super::swar::match_header_value_vectored(bytes)
+    super::swar::match_header_value_vectored(bytes);
 }
 
 #[inline(always)]
@@ -149,13 +149,11 @@ fn avx2_code_matches_uri_chars_table() {
     unsafe {
         assert!(byte_is_allowed(b'_', match_uri_vectored));
 
-        for (b, allowed) in crate::URI_MAP.iter().cloned().enumerate() {
+        for (b, allowed) in crate::URI_MAP.iter().copied().enumerate() {
             assert_eq!(
                 byte_is_allowed(b as u8, match_uri_vectored),
                 allowed,
-                "byte_is_allowed({:?}) should be {:?}",
-                b,
-                allowed,
+                "byte_is_allowed({b:?}) should be {allowed:?}"
             );
         }
     }
@@ -171,13 +169,11 @@ fn avx2_code_matches_header_value_chars_table() {
     unsafe {
         assert!(byte_is_allowed(b'_', match_header_value_vectored));
 
-        for (b, allowed) in crate::HEADER_VALUE_MAP.iter().cloned().enumerate() {
+        for (b, allowed) in crate::HEADER_VALUE_MAP.iter().copied().enumerate() {
             assert_eq!(
                 byte_is_allowed(b as u8, match_header_value_vectored),
                 allowed,
-                "byte_is_allowed({:?}) should be {:?}",
-                b,
-                allowed,
+                "byte_is_allowed({b:?}) should be {allowed:?}"
             );
         }
     }

@@ -5,8 +5,9 @@ macro_rules! req {
         #[test]
         fn $name() {
             let mut b = $buf.as_ref();
-            if let Ok(Status::Complete(req)) = Request::parse(b) {
-                let mut consumed = req.consumed;
+            let mut req = Request::default();
+            if let Ok(Status::Complete(l)) = req.parse(b) {
+                let mut consumed = l;
                 let mut headers = Vec::new();
                 let mut header = Header::default();
                 let mut headers_eof = false;
@@ -61,7 +62,7 @@ macro_rules! req_err {
     ($name:ident, $buf:expr, $err:expr) => {
         #[test]
         fn $name() {
-            assert_eq!(Request::parse($buf.as_ref()), $err);
+            assert_eq!(Request::default().parse($buf.as_ref()), $err);
         }
     };
 }

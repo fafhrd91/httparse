@@ -194,13 +194,11 @@ fn neon_code_matches_uri_chars_table() {
     unsafe {
         assert!(byte_is_allowed(b'_', match_uri_vectored));
 
-        for (b, allowed) in crate::URI_MAP.iter().cloned().enumerate() {
+        for (b, allowed) in crate::URI_MAP.iter().copied().enumerate() {
             assert_eq!(
                 byte_is_allowed(b as u8, match_uri_vectored),
                 allowed,
-                "byte_is_allowed({:?}) should be {:?}",
-                b,
-                allowed,
+                "byte_is_allowed({b:?}) should be {allowed:?}"
             );
         }
     }
@@ -212,13 +210,11 @@ fn neon_code_matches_header_value_chars_table() {
     unsafe {
         assert!(byte_is_allowed(b'_', match_header_value_vectored));
 
-        for (b, allowed) in crate::HEADER_VALUE_MAP.iter().cloned().enumerate() {
+        for (b, allowed) in crate::HEADER_VALUE_MAP.iter().copied().enumerate() {
             assert_eq!(
                 byte_is_allowed(b as u8, match_header_value_vectored),
                 allowed,
-                "byte_is_allowed({:?}) should be {:?}",
-                b,
-                allowed,
+                "byte_is_allowed({b:?}) should be {allowed:?}"
             );
         }
     }
@@ -230,13 +226,11 @@ fn neon_code_matches_header_name_chars_table() {
     unsafe {
         assert!(byte_is_allowed(b'_', match_header_name_vectored));
 
-        for (b, allowed) in crate::TOKEN_MAP.iter().cloned().enumerate() {
+        for (b, allowed) in crate::TOKEN_MAP.iter().copied().enumerate() {
             assert_eq!(
                 byte_is_allowed(b as u8, match_header_name_vectored),
                 allowed,
-                "byte_is_allowed({:?}) should be {:?}",
-                b,
-                allowed,
+                "byte_is_allowed({b:?}) should be {allowed:?}"
             );
         }
     }
@@ -253,6 +247,6 @@ unsafe fn byte_is_allowed(byte: u8, f: unsafe fn(bytes: &mut Bytes<'_>)) -> bool
     match bytes.pos() {
         16 => true,
         10 => false,
-        x => panic!("unexpected pos: {}", x),
+        x => panic!("unexpected pos: {x}"),
     }
 }

@@ -1,6 +1,6 @@
 /// SWAR: SIMD Within A Register
 /// SIMD validator backend that validates register-sized chunks of data at a time.
-use crate::{is_header_name_token, is_header_value_token, is_uri_token, Bytes};
+use crate::{Bytes, is_header_name_token, is_header_value_token, is_uri_token};
 
 // Adapt block-size to match native register size, i.e: 32bit => 4, 64bit => 8
 const BLOCK_SIZE: usize = core::mem::size_of::<usize>();
@@ -20,15 +20,15 @@ pub fn match_uri_vectored(bytes: &mut Bytes) {
                 continue;
             }
         }
-        if let Some(b) = bytes.peek() {
-            if is_uri_token(b) {
-                // SAFETY: using peek to retrieve the byte ensures that there is at least 1 more byte
-                // in bytes, so calling advance is safe.
-                unsafe {
-                    bytes.advance(1);
-                }
-                continue;
+        if let Some(b) = bytes.peek()
+            && is_uri_token(b)
+        {
+            // SAFETY: using peek to retrieve the byte ensures that there is at least 1 more byte
+            // in bytes, so calling advance is safe.
+            unsafe {
+                bytes.advance(1);
             }
+            continue;
         }
         break;
     }
@@ -48,15 +48,15 @@ pub fn match_header_value_vectored(bytes: &mut Bytes) {
                 continue;
             }
         }
-        if let Some(b) = bytes.peek() {
-            if is_header_value_token(b) {
-                // SAFETY: using peek to retrieve the byte ensures that there is at least 1 more byte
-                // in bytes, so calling advance is safe.
-                unsafe {
-                    bytes.advance(1);
-                }
-                continue;
+        if let Some(b) = bytes.peek()
+            && is_header_value_token(b)
+        {
+            // SAFETY: using peek to retrieve the byte ensures that there is at least 1 more byte
+            // in bytes, so calling advance is safe.
+            unsafe {
+                bytes.advance(1);
             }
+            continue;
         }
         break;
     }
@@ -180,11 +180,11 @@ fn test_is_header_value_block() {
 
     // 0..32 => false
     for b in 0..32_u8 {
-        assert!(!is_header_value_block([b; BLOCK_SIZE]), "b={}", b);
+        assert!(!is_header_value_block([b; BLOCK_SIZE]), "b={b}");
     }
     // 32..=126 => true
     for b in 32..=126_u8 {
-        assert!(is_header_value_block([b; BLOCK_SIZE]), "b={}", b);
+        assert!(is_header_value_block([b; BLOCK_SIZE]), "b={b}");
     }
     // 127 => false
     assert!(
@@ -194,7 +194,7 @@ fn test_is_header_value_block() {
     );
     // 128..=255 => true
     for b in 128..=255_u8 {
-        assert!(is_header_value_block([b; BLOCK_SIZE]), "b={}", b);
+        assert!(is_header_value_block([b; BLOCK_SIZE]), "b={b}");
     }
 
     #[cfg(target_pointer_width = "64")]
@@ -211,17 +211,17 @@ fn test_is_uri_block() {
 
     // 0..33 => false
     for b in 0..33_u8 {
-        assert!(!is_uri_block([b; BLOCK_SIZE]), "b={}", b);
+        assert!(!is_uri_block([b; BLOCK_SIZE]), "b={b}");
     }
     // 33..=126 => true
     for b in 33..=126_u8 {
-        assert!(is_uri_block([b; BLOCK_SIZE]), "b={}", b);
+        assert!(is_uri_block([b; BLOCK_SIZE]), "b={b}");
     }
     // 127 => false
     assert!(!is_uri_block([b'\x7F'; BLOCK_SIZE]), "b={}", b'\x7F');
     // 128..=255 => true
     for b in 128..=255_u8 {
-        assert!(is_uri_block([b; BLOCK_SIZE]), "b={}", b);
+        assert!(is_uri_block([b; BLOCK_SIZE]), "b={b}");
     }
 }
 
