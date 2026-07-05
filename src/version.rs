@@ -1,4 +1,4 @@
-use crate::{iter::Bytes, Error, Result, Status};
+use crate::{Error, Result, Status, iter::Bytes};
 
 #[inline]
 #[allow(missing_docs)]

@@ -6,43 +6,42 @@ macro_rules! req {
         fn $name() {
             let mut b = $buf.as_ref();
             let mut req = Request::default();
-            if let Ok(Status::Complete(l)) = req.parse(b) {
-                let mut consumed = l;
-                let mut headers = Vec::new();
-                let mut header = Header::default();
-                let mut headers_eof = false;
-                b = &b[consumed..];
+            let mut consumed = req.parse(b).unwrap().unwrap();
+            let mut headers = Vec::new();
+            let mut header = Header::default();
+            let mut headers_eof = false;
+            b = &b[consumed..];
 
-                while let Ok(Status::Complete(hdr)) = header.parse(b) {
-                    match hdr {
-                        HeaderParsed::Header(l) => {
-                            consumed += l;
-                            let name = String::from_utf8(Vec::from(
-                                &b[header.name_start..header.name_end],
-                            ))
-                            .unwrap();
-                            let value = Vec::from(&b[header.value_start..header.value_end]);
-                            headers.push((name, value));
-                            b = &b[l..];
-                        }
-                        HeaderParsed::Eof(l) => {
-                            consumed += l;
-                            headers_eof = true;
-                            break;
-                        }
+            while let Ok(Status::Complete(hdr)) = header.parse(b) {
+                match hdr {
+                    HeaderParsed::Header(l) => {
+                        consumed += l;
+                        let name =
+                            String::from_utf8(Vec::from(&b[header.name_start..header.name_end]))
+                                .unwrap();
+                        let value = Vec::from(&b[header.value_start..header.value_end]);
+                        headers.push((name, value));
+                        b = &b[l..];
+                    }
+                    HeaderParsed::Eof(l) => {
+                        consumed += l;
+                        headers_eof = true;
+                        break;
                     }
                 }
-                closure(
-                    consumed,
-                    req.method,
-                    req.path,
-                    req.version,
-                    headers,
-                    headers_eof,
-                );
-            } else {
-                panic!()
             }
+
+            let path =
+                unsafe { str::from_utf8_unchecked(&$buf.as_ref()[req.path_start..req.path_end]) };
+
+            closure(
+                consumed,
+                req.method,
+                path,
+                req.version,
+                headers,
+                headers_eof,
+            );
 
             fn closure(
                 $len: usize,

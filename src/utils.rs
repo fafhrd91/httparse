@@ -1,4 +1,4 @@
-use super::{iter::Bytes, Error, Result, Status};
+use super::{Error, Result, Status, iter::Bytes};
 
 // char codes to accept URI string.
 // i.e. b'!' <= char and char != 127

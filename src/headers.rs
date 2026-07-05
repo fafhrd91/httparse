@@ -1,4 +1,4 @@
-use crate::{iter::Bytes, simd, utils, Error, Result, Status};
+use crate::{Error, Result, Status, iter::Bytes, simd, utils};
 
 /// Represents a parsed header.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
