@@ -9,7 +9,7 @@ type ByteBlock = [u8; BLOCK_SIZE];
 #[inline]
 pub fn match_uri_vectored(bytes: &mut Bytes) {
     loop {
-        if let Some(bytes8) = bytes.peek_n::<ByteBlock>(BLOCK_SIZE) {
+        if let Some(bytes8) = bytes.peek_n::<BLOCK_SIZE>() {
             let n = match_uri_char_8_swar(bytes8);
             // SAFETY: using peek_n to retrieve the bytes ensures that there are at least n more bytes
             // in `bytes`, so calling `advance(n)` is safe.
@@ -37,7 +37,7 @@ pub fn match_uri_vectored(bytes: &mut Bytes) {
 #[inline]
 pub fn match_header_value_vectored(bytes: &mut Bytes) {
     loop {
-        if let Some(bytes8) = bytes.peek_n::<ByteBlock>(BLOCK_SIZE) {
+        if let Some(bytes8) = bytes.peek_n::<BLOCK_SIZE>() {
             let n = match_header_value_char_8_swar(bytes8);
             // SAFETY: using peek_n to retrieve the bytes ensures that there are at least n more bytes
             // in `bytes`, so calling `advance(n)` is safe.
@@ -64,7 +64,7 @@ pub fn match_header_value_vectored(bytes: &mut Bytes) {
 
 #[inline]
 pub fn match_header_name_vectored(bytes: &mut Bytes) {
-    while let Some(block) = bytes.peek_n::<ByteBlock>(BLOCK_SIZE) {
+    while let Some(block) = bytes.peek_n::<BLOCK_SIZE>() {
         let n = match_block(is_header_name_token, block);
         // SAFETY: using peek_n to retrieve the bytes ensures that there are at least n more bytes
         // in `bytes`, so calling `advance(n)` is safe.

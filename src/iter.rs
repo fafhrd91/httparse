@@ -1,4 +1,3 @@
-use core::convert::TryFrom;
 use core::convert::TryInto;
 
 #[allow(missing_docs)]
@@ -70,11 +69,8 @@ impl<'a> Bytes<'a> {
     }
 
     #[inline]
-    pub fn peek_n<'b: 'a, U: TryFrom<&'a [u8]>>(&'b self, n: usize) -> Option<U> {
-        // TODO: once we bump MSRV, use const generics to allow only [u8; N] reads
-        // TODO: drop `n` arg in favour of const
-        // let n = core::mem::size_of::<U>();
-        self.as_ref().get(..n)?.try_into().ok()
+    pub fn peek_n<const N: usize>(&self) -> Option<[u8; N]> {
+        self.as_ref().get(..N)?.try_into().ok()
     }
 
     /// Advance by 1, equivalent to calling `advance(1)`.
