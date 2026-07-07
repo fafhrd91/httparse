@@ -1,7 +1,7 @@
 use std::{hint::black_box, time::Duration};
 
 use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
-use ntex_httparse::{Header, HeaderParsed, Request, Response};
+use ntex_httparse::{Header, HeaderParsed, Request, Response, SlicePos};
 
 const REQ_SHORT: &[u8] = b"\
 GET / HTTP/1.0\r\n\
@@ -29,10 +29,8 @@ fn req(c: &mut Criterion) {
                     (
                         Request::default(),
                         [Header {
-                            name_start: 0,
-                            name_end: 0,
-                            value_start: 0,
-                            value_end: 0,
+                            name: SlicePos { start: 0, end: 0 },
+                            value: SlicePos { start: 0, end: 0 },
                         }; 16],
                     )
                 },
@@ -63,10 +61,8 @@ fn req_short(c: &mut Criterion) {
             b.iter_batched_ref(
                 || {
                     [Header {
-                        name_start: 0,
-                        name_end: 0,
-                        value_start: 0,
-                        value_end: 0,
+                        name: SlicePos { start: 0, end: 0 },
+                        value: SlicePos { start: 0, end: 0 },
                     }; 16]
                 },
                 |headers| {
@@ -118,10 +114,8 @@ fn resp(c: &mut Criterion) {
                     (
                         Response::default(),
                         [Header {
-                            name_start: 0,
-                            name_end: 0,
-                            value_start: 0,
-                            value_end: 0,
+                            name: SlicePos { start: 0, end: 0 },
+                            value: SlicePos { start: 0, end: 0 },
                         }; 16],
                     )
                 },
@@ -154,10 +148,8 @@ fn resp_short(c: &mut Criterion) {
                     (
                         Response::default(),
                         [Header {
-                            name_start: 0,
-                            name_end: 0,
-                            value_start: 0,
-                            value_end: 0,
+                            name: SlicePos { start: 0, end: 0 },
+                            value: SlicePos { start: 0, end: 0 },
                         }; 16],
                     )
                 },
@@ -213,10 +205,8 @@ fn header(c: &mut Criterion) {
                 b.iter_batched_ref(
                     || {
                         [Header {
-                            name_start: 0,
-                            name_end: 0,
-                            value_start: 0,
-                            value_end: 0,
+                            name: SlicePos { start: 0, end: 0 },
+                            value: SlicePos { start: 0, end: 0 },
                         }; 128]
                     },
                     |headers| {

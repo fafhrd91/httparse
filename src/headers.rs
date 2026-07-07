@@ -1,4 +1,4 @@
-use crate::{Error, Result, Status, iter::Bytes, simd, utils};
+use crate::{Error, Result, SlicePos, Status, iter::Bytes, simd, utils};
 
 /// Represents a parsed header.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
@@ -6,14 +6,12 @@ pub struct Header {
     /// The name portion of a header.
     ///
     /// A header name must be valid ASCII-US, so it's safe to store as a `&str`.
-    pub name_start: usize,
-    pub name_end: usize,
+    pub name: SlicePos,
     /// The value portion of a header.
     ///
     /// While headers **should** be ASCII-US, the specification allows for
     /// values that may not be, and so the value is stored as bytes.
-    pub value_start: usize,
-    pub value_end: usize,
+    pub value: SlicePos,
 }
 
 /// Header parse result result.
@@ -66,12 +64,12 @@ fn parse_header_iter_uninit(bytes: &mut Bytes<'_>, header: &mut Header) -> Resul
         if !utils::is_header_name_token(b) {
             return Err(Error::HeaderName);
         }
-        header.name_start = bytes.slice_pos() - 1;
+        header.name.start = bytes.slice_pos() - 1;
 
         simd::match_header_name_vectored(bytes);
         if next!(bytes) == b':' {
             // SAFETY: previously bumped by 1 with next! -> always safe.
-            header.name_end = bytes.slice_pos() - 1;
+            header.name.end = bytes.slice_pos() - 1;
             bytes.commit();
         } else {
             return Err(Error::HeaderName);
@@ -88,7 +86,7 @@ fn parse_header_iter_uninit(bytes: &mut Bytes<'_>, header: &mut Header) -> Resul
             continue 'whitespace_after_colon;
         }
         if utils::is_header_value_token(b) {
-            header.value_start = bytes.slice_pos() - 1;
+            header.value.start = bytes.slice_pos() - 1;
             break 'whitespace_after_colon;
         }
 
@@ -101,8 +99,7 @@ fn parse_header_iter_uninit(bytes: &mut Bytes<'_>, header: &mut Header) -> Resul
 
         // This produces an empty slice that points to the beginning
         // of the whitespace.
-        header.value_start = bytes.slice_pos();
-        header.value_end = bytes.slice_pos();
+        header.value.reset();
         return Ok(Status::Complete(HeaderParsed::Header(bytes.slice_pos())));
     }
 
@@ -110,7 +107,7 @@ fn parse_header_iter_uninit(bytes: &mut Bytes<'_>, header: &mut Header) -> Resul
     {
         simd::match_header_value_vectored(bytes);
 
-        header.value_end = bytes.slice_pos();
+        header.value.end = bytes.slice_pos();
         let value = bytes.slice();
 
         // check ctl
@@ -123,7 +120,7 @@ fn parse_header_iter_uninit(bytes: &mut Bytes<'_>, header: &mut Header) -> Resul
 
         // trim trailing whitespace in the header
         if let Some(last_visible) = value.iter().rposition(|b| *b != b' ' && *b != b'\t') {
-            header.value_end = header.value_start + last_visible + 1;
+            header.value.end = header.value.start + last_visible + 1;
         }
         bytes.commit();
     }

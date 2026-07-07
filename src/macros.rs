@@ -45,22 +45,15 @@ macro_rules! byte_map {
     }}
 }
 
-macro_rules! space {
-    ($bytes:ident or $err:expr) => ({
-        expect!($bytes.next() == b' ' => Err($err));
-        $bytes.slice();
-    })
-}
-
 macro_rules! newline {
     ($bytes:ident) => ({
         match next!($bytes) {
             b'\r' => {
                 expect!($bytes.next() == b'\n' => Err(Error::NewLine));
-                $bytes.slice();
+                $bytes.commit();
             },
             b'\n' => {
-                $bytes.slice();
+                $bytes.commit();
             },
             _ => return Err(Error::NewLine)
         }
