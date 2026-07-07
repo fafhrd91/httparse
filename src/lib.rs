@@ -154,6 +154,20 @@ impl<T> Status<T> {
     }
 }
 
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
+/// A slice position.
+pub struct SlicePos {
+    pub start: usize,
+    pub end: usize,
+}
+
+impl SlicePos {
+    pub(crate) fn reset(&mut self) {
+        self.start = 0;
+        self.end = 0;
+    }
+}
+
 /// A parsed Request.
 ///
 /// # Example
@@ -168,28 +182,23 @@ impl<T> Status<T> {
 /// }
 /// ```
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
-pub struct Request<'a> {
+pub struct Request {
     /// Parsed request's method.
-    pub method: &'a str,
+    pub method: SlicePos,
     /// Parsed request's path.
-    pub path: &'a str,
-    pub path_start: usize,
-    pub path_end: usize,
+    pub path: SlicePos,
     /// Parsed request's http version.
     pub version: u8,
 }
 
-impl<'a> Request<'a> {
+impl Request {
     #[inline]
     /// Parse request
-    pub fn parse(&mut self, src: &'a [u8]) -> Result<usize> {
+    pub fn parse(&mut self, src: &[u8]) -> Result<usize> {
         let mut bytes = Bytes::new(src);
 
         self.method = complete!(parse_method_inner(&mut bytes));
-        let (path, start, end) = complete!(parse_uri_inner(&mut bytes));
-        self.path = path;
-        self.path_start = start;
-        self.path_end = end;
+        self.path = complete!(parse_uri_inner(&mut bytes)).1;
         self.version = complete!(version::parse_version_inner(&mut bytes));
 
         newline!(bytes);
@@ -199,26 +208,31 @@ impl<'a> Request<'a> {
 
 /// A parsed Response.
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
-pub struct Response<'a> {
+pub struct Response {
     /// Parsed response's http version.
     pub version: u8,
     /// Parsed response's code.
     pub code: u16,
-    /// Parsed response's reason.
-    pub reason: &'a str,
+    /// Parsed response's reason (start position, length).
+    pub reason: SlicePos,
 }
 
-impl<'a> Response<'a> {
+impl Response {
     #[inline]
     /// Parse response code and reason
-    pub fn parse(&mut self, src: &'a [u8]) -> Result<usize> {
+    pub fn parse(&mut self, src: &[u8]) -> Result<usize> {
         let mut bytes = Bytes::new(src);
 
         complete!(utils::skip_empty_lines(&mut bytes));
+
+        // version
         self.version = complete!(version::parse_version_inner(&mut bytes));
         complete!(utils::skip_empty_lines(&mut bytes));
-        space!(bytes or Error::Version);
+        expect!(bytes.next() == b' ' => Err(Error::Version));
+        bytes.commit();
         complete!(utils::skip_spaces(&mut bytes));
+
+        // code
         self.code = complete!(parse_code(&mut bytes));
 
         // RFC7230 says there must be 'SP' and then reason-phrase, but admits
@@ -233,17 +247,17 @@ impl<'a> Response<'a> {
         self.reason = match next!(bytes) {
             b' ' => {
                 complete!(utils::skip_spaces(&mut bytes));
-                bytes.slice();
+                bytes.commit();
                 complete!(parse_reason(&mut bytes))
             }
             b'\r' => {
                 expect!(bytes.next() == b'\n' => Err(Error::Status));
-                bytes.slice();
-                ""
+                bytes.commit();
+                SlicePos::default()
             }
             b'\n' => {
-                bytes.slice();
-                ""
+                bytes.commit();
+                SlicePos::default()
             }
             _ => return Err(Error::Status),
         };
@@ -255,13 +269,15 @@ impl<'a> Response<'a> {
 #[inline]
 // WARNING: Exported for internal benchmarks, not fit for public consumption
 pub fn parse_method(src: &[u8]) -> Result<&str> {
-    let mut bytes = Bytes::new(src);
-    parse_method_inner(&mut bytes)
+    let s = complete!(parse_method_inner(&mut Bytes::new(src)));
+    // SAFETY: parse_method_inner verifies validity of method
+    let m = unsafe { str::from_utf8_unchecked(&src[s.start..s.end]) };
+    Ok(Status::Complete(m))
 }
 
 #[inline]
 // WARNING: Exported for internal benchmarks, not fit for public consumption
-fn parse_method_inner<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
+fn parse_method_inner(bytes: &mut Bytes<'_>) -> Result<SlicePos> {
     const GET: [u8; 4] = *b"GET ";
     const POST: [u8; 4] = *b"POST";
 
@@ -272,7 +288,7 @@ fn parse_method_inner<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
             // SAFETY: we matched "GET " which has 4 bytes and is ASCII
             let method = unsafe {
                 bytes.advance(4); // advance cursor past "GET "
-                str::from_utf8_unchecked(bytes.slice_skip(1)) // "GET" without space
+                bytes.slice_position(1)
             };
             complete!(utils::skip_spaces(bytes));
             Ok(Status::Complete(method))
@@ -286,12 +302,30 @@ fn parse_method_inner<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
             // SAFETY: we matched "POST " which has 5 bytes
             let method = unsafe {
                 bytes.advance(5); // advance cursor past "POST "
-                str::from_utf8_unchecked(bytes.slice_skip(1)) // "POST" without space
+                bytes.slice_position(1)
             };
             complete!(utils::skip_spaces(bytes));
             Ok(Status::Complete(method))
         }
-        _ => parse_token(bytes),
+        _ => {
+            let b = next!(bytes);
+            if !utils::is_method_token(b) {
+                // First char must be a token char, it can't be a space which would indicate an empty token.
+                return Err(Error::Token);
+            }
+
+            loop {
+                let b = next!(bytes);
+                if b == b' ' {
+                    return Ok(Status::Complete(
+                        // SAFETY: all bytes up till `i` must have been `is_method_token` and therefore also utf-8.
+                        bytes.slice_position(1),
+                    ));
+                } else if !utils::is_method_token(b) {
+                    return Err(Error::Token);
+                }
+            }
+        }
     }
 }
 
@@ -309,7 +343,7 @@ fn parse_method_inner<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
 /// > Non-US-ASCII content in header fields and the reason phrase
 /// > has been obsoleted and made opaque (the TEXT rule was removed).
 #[inline]
-fn parse_reason<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
+fn parse_reason(bytes: &mut Bytes<'_>) -> Result<SlicePos> {
     let mut seen_obs_text = false;
     loop {
         let b = next!(bytes);
@@ -321,15 +355,13 @@ fn parse_reason<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
                 // (2) calling from_utf8_unchecked is safe, because the bytes returned by slice_skip
                 // were validated to be allowed US-ASCII chars by the other arms of the if/else or
                 // otherwise `seen_obs_text` is true and an empty string is returned instead.
-                unsafe {
-                    let bytes = bytes.slice_skip(2);
-                    if seen_obs_text {
-                        // obs-text characters were found, so return the fallback empty string
-                        ""
-                    } else {
-                        // all bytes up till `i` must have been HTAB / SP / VCHAR
-                        str::from_utf8_unchecked(bytes)
-                    }
+                if seen_obs_text {
+                    // obs-text characters were found, so return the fallback empty string
+                    bytes.commit();
+                    SlicePos::default()
+                } else {
+                    // all bytes up till `i` must have been HTAB / SP / VCHAR
+                    bytes.slice_position(2)
                 },
             ));
         } else if b == b'\n' {
@@ -337,15 +369,13 @@ fn parse_reason<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
                 // SAFETY: (1) calling bytes.slice_skip(1) is safe, because at least one next! call
                 // advance the bytes iterator.
                 // (2) see (2) of safety comment above.
-                unsafe {
-                    let bytes = bytes.slice_skip(1);
-                    if seen_obs_text {
-                        // obs-text characters were found, so return the fallback empty string
-                        ""
-                    } else {
-                        // all bytes up till `i` must have been HTAB / SP / VCHAR
-                        str::from_utf8_unchecked(bytes)
-                    }
+                if seen_obs_text {
+                    // obs-text characters were found, so return the fallback empty string
+                    bytes.commit();
+                    SlicePos::default()
+                } else {
+                    // all bytes up till `i` must have been HTAB / SP / VCHAR
+                    bytes.slice_position(1)
                 },
             ));
         } else if !(b == 0x09 || b == b' ' || (0x21..=0x7E).contains(&b) || b >= 0x80) {
@@ -357,32 +387,11 @@ fn parse_reason<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
 }
 
 #[inline]
-fn parse_token<'a>(bytes: &mut Bytes<'a>) -> Result<&'a str> {
-    let b = next!(bytes);
-    if !utils::is_method_token(b) {
-        // First char must be a token char, it can't be a space which would indicate an empty token.
-        return Err(Error::Token);
-    }
-
-    loop {
-        let b = next!(bytes);
-        if b == b' ' {
-            return Ok(Status::Complete(
-                // SAFETY: all bytes up till `i` must have been `is_method_token` and therefore also utf-8.
-                unsafe { str::from_utf8_unchecked(bytes.slice_skip(1)) },
-            ));
-        } else if !utils::is_method_token(b) {
-            return Err(Error::Token);
-        }
-    }
-}
-
-#[inline]
 #[allow(missing_docs)]
 // WARNING: Exported for internal benchmarks, not fit for public consumption
 pub fn parse_uri(src: &[u8]) -> Result<&str> {
     let mut bytes = Bytes::new(src);
-    if let Status::Complete((path, _, _)) = parse_uri_inner(&mut bytes)? {
+    if let Status::Complete((path, _)) = parse_uri_inner(&mut bytes)? {
         Ok(Status::Complete(path))
     } else {
         Ok(Status::Partial)
@@ -391,7 +400,7 @@ pub fn parse_uri(src: &[u8]) -> Result<&str> {
 
 #[inline]
 // WARNING: Exported for internal benchmarks, not fit for public consumption
-fn parse_uri_inner<'a>(bytes: &mut Bytes<'a>) -> Result<(&'a str, usize, usize)> {
+fn parse_uri_inner<'a>(bytes: &mut Bytes<'a>) -> Result<(&'a str, SlicePos)> {
     let start = bytes.slice_pos();
     let b_start = bytes.pos();
     simd::match_uri_vectored(bytes);
@@ -408,7 +417,7 @@ fn parse_uri_inner<'a>(bytes: &mut Bytes<'a>) -> Result<(&'a str, usize, usize)>
         if let Ok(path) = simdutf8::basic::from_utf8(uri) {
             let end = bytes.slice_pos() - 1;
             complete!(utils::skip_spaces(bytes));
-            Ok(Status::Complete((path, start, end)))
+            Ok(Status::Complete((path, SlicePos { start, end })))
         } else {
             Err(Error::Token)
         }
@@ -527,10 +536,10 @@ mod tests {
                             HeaderParsed::Header(l) => {
                                 consumed += l;
                                 let name = String::from_utf8(Vec::from(
-                                    &b[header.name_start..header.name_end],
+                                    &b[header.name.start..header.name.end],
                                 ))
                                 .unwrap();
-                                let value = Vec::from(&b[header.value_start..header.value_end]);
+                                let value = Vec::from(&b[header.value.start..header.value.end]);
                                 headers.push((name, value));
                                 b = &b[l..];
                             }
@@ -544,17 +553,13 @@ mod tests {
 
                     // SAFETY: Request::parse() validates path
                     let path = unsafe {
-                        str::from_utf8_unchecked(&$buf.as_ref()[req.path_start..req.path_end])
+                        str::from_utf8_unchecked(&$buf.as_ref()[req.path.start..req.path.end])
+                    };
+                    let method = unsafe {
+                        str::from_utf8_unchecked(&$buf.as_ref()[req.method.start..req.method.end])
                     };
 
-                    closure(
-                        consumed,
-                        req.method,
-                        path,
-                        req.version,
-                        headers,
-                        headers_eof,
-                    );
+                    closure(consumed, method, path, req.version, headers, headers_eof);
                 } else {
                     panic!()
                 }
@@ -588,10 +593,10 @@ mod tests {
                         HeaderParsed::Header(l) => {
                             consumed += l;
                             let name = String::from_utf8(Vec::from(
-                                &b[header.name_start..header.name_end],
+                                &b[header.name.start..header.name.end],
                             ))
                             .unwrap();
-                            let value = Vec::from(&b[header.value_start..header.value_end]);
+                            let value = Vec::from(&b[header.value.start..header.value.end]);
                             headers.push((name, value));
                             b = &b[l..];
                         }
@@ -1001,10 +1006,10 @@ mod tests {
                         HeaderParsed::Header(l) => {
                             consumed += l;
                             let name = String::from_utf8(Vec::from(
-                                &b[header.name_start..header.name_end],
+                                &b[header.name.start..header.name.end],
                             ))
                             .unwrap();
-                            let value = Vec::from(&b[header.value_start..header.value_end]);
+                            let value = Vec::from(&b[header.value.start..header.value.end]);
                             headers.push((name, value));
                             b = &b[l..];
                         }
@@ -1015,11 +1020,16 @@ mod tests {
                         }
                     }
                 }
+
+                let reason = unsafe {
+                    str::from_utf8_unchecked(&$buf.as_ref()[res.reason.start..res.reason.end])
+                };
+
                 closure(
                     consumed,
                     res.version,
                     res.code,
-                    res.reason,
+                    reason,
                     headers,
                     headers_eof,
                 );

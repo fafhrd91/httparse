@@ -17,9 +17,9 @@ macro_rules! req {
                     HeaderParsed::Header(l) => {
                         consumed += l;
                         let name =
-                            String::from_utf8(Vec::from(&b[header.name_start..header.name_end]))
+                            String::from_utf8(Vec::from(&b[header.name.start..header.name.end]))
                                 .unwrap();
-                        let value = Vec::from(&b[header.value_start..header.value_end]);
+                        let value = Vec::from(&b[header.value.start..header.value.end]);
                         headers.push((name, value));
                         b = &b[l..];
                     }
@@ -32,16 +32,12 @@ macro_rules! req {
             }
 
             let path =
-                unsafe { str::from_utf8_unchecked(&$buf.as_ref()[req.path_start..req.path_end]) };
+                unsafe { str::from_utf8_unchecked(&$buf.as_ref()[req.path.start..req.path.end]) };
+            let method = unsafe {
+                str::from_utf8_unchecked(&$buf.as_ref()[req.method.start..req.method.end])
+            };
 
-            closure(
-                consumed,
-                req.method,
-                path,
-                req.version,
-                headers,
-                headers_eof,
-            );
+            closure(consumed, method, path, req.version, headers, headers_eof);
 
             fn closure(
                 $len: usize,

@@ -1,5 +1,11 @@
-#![allow(clippy::cast_sign_loss, unsafe_op_in_unsafe_fn)]
+#![allow(
+    unsafe_op_in_unsafe_fn,
+    clippy::cast_sign_loss,
+    clippy::undocumented_unsafe_blocks
+)]
 use core::convert::TryInto;
+
+use crate::SlicePos;
 
 #[allow(missing_docs)]
 pub(crate) struct Bytes<'a> {
@@ -57,7 +63,7 @@ impl<'a> Bytes<'a> {
     /// and `self.cursor.add(n)` is either `self.end` or points to a valid byte.
     #[inline]
     pub(crate) unsafe fn peek_ahead(&self, n: usize) -> Option<u8> {
-        debug_assert!(n <= self.len());
+        debug_assert!(n <= (self.end as usize - self.cursor as usize));
         // SAFETY: by preconditions
         let p = unsafe { self.cursor.add(n) };
         if p < self.end {
@@ -74,16 +80,6 @@ impl<'a> Bytes<'a> {
         self.as_ref().get(..N)?.try_into().ok()
     }
 
-    /// Advance by 1, equivalent to calling `advance(1)`.
-    ///
-    /// # Safety
-    ///
-    /// Caller must ensure that Bytes hasn't been advanced/bumped by more than [`Bytes::len()`].
-    #[inline]
-    pub(crate) unsafe fn bump(&mut self) {
-        self.advance(1);
-    }
-
     /// Advance cursor by `n`
     ///
     /// # Safety
@@ -93,11 +89,6 @@ impl<'a> Bytes<'a> {
     pub(crate) unsafe fn advance(&mut self, n: usize) {
         self.cursor = self.cursor.add(n);
         debug_assert!(self.cursor <= self.end, "overflow");
-    }
-
-    #[inline]
-    pub(crate) fn len(&self) -> usize {
-        self.end as usize - self.cursor as usize
     }
 
     #[inline]
@@ -120,6 +111,17 @@ impl<'a> Bytes<'a> {
         let head = slice_from_ptr_range(self.start, self.cursor.sub(skip));
         self.commit();
         head
+    }
+
+    #[inline]
+    pub(crate) fn slice_position(&mut self, skip: usize) -> SlicePos {
+        unsafe {
+            debug_assert!(skip <= self.cursor.offset_from(self.start) as usize);
+        }
+        let start = self.start as usize - self.slice as usize;
+        let end = (self.cursor as usize - self.slice as usize) - skip;
+        self.commit();
+        SlicePos { start, end }
     }
 
     #[inline]
@@ -154,7 +156,7 @@ impl Iterator for Bytes<'_> {
             // SAFETY: bounds checked dereference
             unsafe {
                 let b = *self.cursor;
-                self.bump();
+                self.advance(1);
                 Some(b)
             }
         } else {
