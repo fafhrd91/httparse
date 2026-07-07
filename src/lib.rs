@@ -552,11 +552,13 @@ mod tests {
                     }
 
                     // SAFETY: Request::parse() validates path
-                    let path = unsafe {
-                        str::from_utf8_unchecked(&$buf.as_ref()[req.path.start..req.path.end])
-                    };
-                    let method = unsafe {
-                        str::from_utf8_unchecked(&$buf.as_ref()[req.method.start..req.method.end])
+                    let (path, method) = unsafe {
+                        (
+                            str::from_utf8_unchecked(&$buf.as_ref()[req.path.start..req.path.end]),
+                            str::from_utf8_unchecked(
+                                &$buf.as_ref()[req.method.start..req.method.end],
+                            ),
+                        )
                     };
 
                     closure(consumed, method, path, req.version, headers, headers_eof);
@@ -1021,6 +1023,7 @@ mod tests {
                     }
                 }
 
+                // SAFETY: Request::parse() validates reason
                 let reason = unsafe {
                     str::from_utf8_unchecked(&$buf.as_ref()[res.reason.start..res.reason.end])
                 };
