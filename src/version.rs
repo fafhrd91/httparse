@@ -1,24 +1,21 @@
-use crate::{Error, Result, Status, iter::Bytes};
+use crate::{Error, Result, State, Status, iter::Bytes};
 
 #[inline]
-#[allow(missing_docs)]
-// WARNING: Exported for internal benchmarks, not fit for public consumption
+/// Parse request's version
 pub fn parse_version(src: &[u8]) -> Result<u8> {
-    let mut bytes = Bytes::new(src);
+    let mut st = State::default();
+    let mut bytes = Bytes::new(src, &mut st);
     parse_version_inner(&mut bytes)
 }
 
 #[inline]
 #[allow(missing_docs)]
-// WARNING: Exported for internal benchmarks, not fit for public consumption
-pub(crate) fn parse_version_inner(bytes: &mut Bytes<'_>) -> Result<u8> {
+pub(crate) fn parse_version_inner(bytes: &mut Bytes<'_, '_>) -> Result<u8> {
     if let Some(eight) = bytes.peek_n::<8>() {
         const H10: u64 = u64::from_ne_bytes(*b"HTTP/1.0");
         const H11: u64 = u64::from_ne_bytes(*b"HTTP/1.1");
-        // SAFETY: peek_n before ensures within bounds
-        unsafe {
-            bytes.advance(8);
-        }
+        // peek_n before ensures within bounds
+        bytes.advance(8);
         return match u64::from_ne_bytes(eight) {
             H10 => Ok(Status::Complete(0)),
             H11 => Ok(Status::Complete(1)),

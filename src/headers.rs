@@ -1,4 +1,4 @@
-use crate::{Error, Result, SlicePos, Status, iter::Bytes, simd, utils};
+use crate::{Error, Result, SlicePos, State, Status, iter::Bytes, simd, utils};
 
 /// Represents a parsed header.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
@@ -39,38 +39,47 @@ impl Header {
     /// assert_eq!(header.parse(buf), Ok(Status::Complete(HeaderParsed::Header(14))));
     /// ```
     pub fn parse(&mut self, src: &[u8]) -> Result<HeaderParsed> {
-        let mut bytes = Bytes::new(src);
+        let mut st = State::default();
+        let mut bytes = Bytes::new(src, &mut st);
         parse_header_iter_uninit(&mut bytes, self)
+    }
+
+    pub fn parse_with_state(&mut self, src: &[u8], st: &mut State) -> Result<HeaderParsed> {
+        parse_header_iter_uninit(&mut Bytes::new(src, st), self)
     }
 }
 
-fn parse_header_iter_uninit(bytes: &mut Bytes<'_>, header: &mut Header) -> Result<HeaderParsed> {
-    // Track starting pointer to calculate the number of bytes parsed.
-    let start = bytes.as_ref().as_ptr() as usize;
-
-    // a newline here means the head is over!
-    let b = next!(bytes);
-    if b == b'\r' {
-        expect!(bytes.next() == b'\n' => Err(Error::NewLine));
-        let end = bytes.as_ref().as_ptr() as usize;
-        return Ok(Status::Complete(HeaderParsed::Eof(end - start)));
-    } else if b == b'\n' {
-        let end = bytes.as_ref().as_ptr() as usize;
-        return Ok(Status::Complete(HeaderParsed::Eof(end - start)));
+fn parse_header_iter_uninit(
+    bytes: &mut Bytes<'_, '_>,
+    header: &mut Header,
+) -> Result<HeaderParsed> {
+    // header eof
+    if bytes.st.state == 0 {
+        // a newline here means the head is over!
+        let b = next!(bytes);
+        if b == b'\r' {
+            expect!(bytes.next() == b'\n' => Err(Error::NewLine));
+            return Ok(Status::Complete(HeaderParsed::Eof(
+                bytes.cursor() - bytes.start(),
+            )));
+        } else if b == b'\n' {
+            return Ok(Status::Complete(HeaderParsed::Eof(
+                bytes.cursor() - bytes.start(),
+            )));
+        } else if !utils::is_header_name_token(b) {
+            return Err(Error::HeaderName);
+        }
+        bytes.st.state = 1;
+        header.name.start = bytes.cursor() - 1;
     }
 
     // parse header name until colon
-    {
-        if !utils::is_header_name_token(b) {
-            return Err(Error::HeaderName);
-        }
-        header.name.start = bytes.slice_pos() - 1;
-
+    if bytes.st.state == 1 {
         simd::match_header_name_vectored(bytes);
         if next!(bytes) == b':' {
             // SAFETY: previously bumped by 1 with next! -> always safe.
-            header.name.end = bytes.slice_pos() - 1;
-            bytes.commit();
+            bytes.st.state = 2;
+            header.name.end = bytes.cursor() - 1;
         } else {
             return Err(Error::HeaderName);
         }
@@ -78,52 +87,64 @@ fn parse_header_iter_uninit(bytes: &mut Bytes<'_>, header: &mut Header) -> Resul
 
     let mut b;
 
-    // eat white space between colon and value
-    'whitespace_after_colon: loop {
-        b = next!(bytes);
-        if b == b' ' || b == b'\t' {
+    // header value start position
+    if bytes.st.state == 2 {
+        // eat white space between colon and value
+        'whitespace_after_colon: loop {
+            b = next!(bytes);
+            if b == b' ' || b == b'\t' {
+                continue 'whitespace_after_colon;
+            }
+            if utils::is_header_value_token(b) {
+                bytes.st.state = 3;
+                header.value.start = bytes.cursor() - 1;
+                break 'whitespace_after_colon;
+            }
+
+            if b == b'\r' {
+                expect!(bytes.next() == b'\n' => Err(Error::HeaderValue));
+            } else if b != b'\n' {
+                return Err(Error::HeaderValue);
+            }
+
+            // This produces an empty slice that points to the beginning
+            // of the whitespace.
+            header.value.reset();
+            bytes.st.state = 0;
             bytes.commit();
-            continue 'whitespace_after_colon;
+            return Ok(Status::Complete(HeaderParsed::Header(bytes.cursor())));
         }
-        if utils::is_header_value_token(b) {
-            header.value.start = bytes.slice_pos() - 1;
-            break 'whitespace_after_colon;
-        }
-
-        if b == b'\r' {
-            expect!(bytes.next() == b'\n' => Err(Error::HeaderValue));
-        } else if b != b'\n' {
-            return Err(Error::HeaderValue);
-        }
-        bytes.commit();
-
-        // This produces an empty slice that points to the beginning
-        // of the whitespace.
-        header.value.reset();
-        return Ok(Status::Complete(HeaderParsed::Header(bytes.slice_pos())));
     }
 
-    // parse value till EOL
-    {
-        simd::match_header_value_vectored(bytes);
+    // header value
+    if bytes.st.state == 3 {
+        // parse value till EOL
+        {
+            simd::match_header_value_vectored(bytes);
 
-        header.value.end = bytes.slice_pos();
-        let value = bytes.slice();
+            // check ctl
+            let b = next!(bytes);
+            if b == b'\r' {
+                expect!(bytes.next() == b'\n' => Err(Error::HeaderValue));
+            } else if b != b'\n' {
+                return Err(Error::HeaderValue);
+            }
 
-        // check ctl
-        let b = next!(bytes);
-        if b == b'\r' {
-            expect!(bytes.next() == b'\n' => Err(Error::HeaderValue));
-        } else if b != b'\n' {
-            return Err(Error::HeaderValue);
+            // trim trailing whitespace in the header
+            let mut n = 1; // previous next() moves cursor to next item
+            while let Some(b) = bytes.peek_behind(n) {
+                if matches!(b, b' ' | b'\t' | b'\r' | b'\n') {
+                    n += 1;
+                } else {
+                    break;
+                }
+            }
+
+            header.value.end = bytes.cursor() - n + 1;
         }
-
-        // trim trailing whitespace in the header
-        if let Some(last_visible) = value.iter().rposition(|b| *b != b' ' && *b != b'\t') {
-            header.value.end = header.value.start + last_visible + 1;
-        }
-        bytes.commit();
     }
+    bytes.st.state = 0;
+    bytes.commit();
 
-    Ok(Status::Complete(HeaderParsed::Header(bytes.slice_pos())))
+    Ok(Status::Complete(HeaderParsed::Header(bytes.cursor())))
 }

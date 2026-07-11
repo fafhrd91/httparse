@@ -52,20 +52,18 @@ pub(crate) fn is_header_value_token(b: u8) -> bool {
 }
 
 #[inline]
-pub(crate) fn skip_empty_lines(bytes: &mut Bytes<'_>) -> Result<()> {
+pub(crate) fn skip_empty_lines(bytes: &mut Bytes<'_, '_>) -> Result<()> {
     loop {
         let b = bytes.peek();
         match b {
             Some(b'\r') => {
-                // SAFETY: peeked and found `\r`, so it's safe to bump 1 pos
-                unsafe { bytes.advance(1) };
+                // peeked and found `\r`, so it's safe to bump 1 pos
+                bytes.advance(1);
                 expect!(bytes.next() == b'\n' => Err(Error::NewLine));
             }
             Some(b'\n') => {
-                // SAFETY: peeked and found `\n`, so it's safe to bump 1 pos
-                unsafe {
-                    bytes.advance(1);
-                }
+                // peeked and found `\n`, so it's safe to bump 1 pos
+                bytes.advance(1);
             }
             Some(..) => {
                 bytes.commit();
@@ -77,13 +75,13 @@ pub(crate) fn skip_empty_lines(bytes: &mut Bytes<'_>) -> Result<()> {
 }
 
 #[inline]
-pub(crate) fn skip_spaces(bytes: &mut Bytes<'_>) -> Result<()> {
+pub(crate) fn skip_spaces(bytes: &mut Bytes<'_, '_>) -> Result<()> {
     loop {
         let b = bytes.peek();
         match b {
             Some(b' ') => {
-                // SAFETY: peeked and found ` `, so it's safe to bump 1 pos
-                unsafe { bytes.advance(1) };
+                // peeked and found ` `, so it's safe to bump 1 pos
+                bytes.advance(1);
             }
             Some(..) => {
                 bytes.commit();
