@@ -68,17 +68,17 @@ pub use self::runtime::*;
 ))]
 mod sse42_compile_time {
     #[inline(always)]
-    pub fn match_header_name_vectored(b: &mut crate::iter::Bytes<'_>) {
+    pub fn match_header_name_vectored(b: &mut crate::iter::Bytes<'_, '_>) {
         super::swar::match_header_name_vectored(b);
     }
 
     #[inline(always)]
-    pub fn match_uri_vectored(b: &mut crate::iter::Bytes<'_>) {
+    pub fn match_uri_vectored(b: &mut crate::iter::Bytes<'_, '_>) {
         unsafe { super::sse42::match_uri_vectored(b) }
     }
 
     #[inline(always)]
-    pub fn match_header_value_vectored(b: &mut crate::iter::Bytes<'_>) {
+    pub fn match_header_value_vectored(b: &mut crate::iter::Bytes<'_, '_>) {
         unsafe { super::sse42::match_header_value_vectored(b) }
     }
 }
@@ -98,7 +98,7 @@ pub use self::sse42_compile_time::*;
 ))]
 mod avx2_compile_time {
     #[inline(always)]
-    pub fn match_header_name_vectored(b: &mut crate::iter::Bytes<'_>) {
+    pub fn match_header_name_vectored(b: &mut crate::iter::Bytes<'_, '_>) {
         super::swar::match_header_name_vectored(b);
     }
 
@@ -108,7 +108,7 @@ mod avx2_compile_time {
     }
 
     #[inline(always)]
-    pub fn match_header_value_vectored(b: &mut crate::iter::Bytes<'_>) {
+    pub fn match_header_value_vectored(b: &mut crate::iter::Bytes<'_, '_>) {
         unsafe { super::avx2::match_header_value_vectored(b) }
     }
 }
