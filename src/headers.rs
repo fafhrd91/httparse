@@ -43,49 +43,52 @@ impl Header {
         let mut bytes = Bytes::new(src, &mut st);
         parse_header_iter_uninit(&mut bytes, self)
     }
+
+    pub fn parse_with_state(&mut self, src: &[u8], st: &mut State) -> Result<HeaderParsed> {
+        parse_header_iter_uninit(&mut Bytes::new(src, st), self)
+    }
 }
 
 fn parse_header_iter_uninit(
     bytes: &mut Bytes<'_, '_>,
     header: &mut Header,
 ) -> Result<HeaderParsed> {
-    // Track starting pointer to calculate the number of bytes parsed.
-    let start = bytes.cursor();
-
-    // header name
+    // header eof
     if bytes.st.state == 0 {
         // a newline here means the head is over!
         let b = next!(bytes);
         if b == b'\r' {
             expect!(bytes.next() == b'\n' => Err(Error::NewLine));
-            return Ok(Status::Complete(HeaderParsed::Eof(bytes.cursor() - start)));
+            return Ok(Status::Complete(HeaderParsed::Eof(
+                bytes.cursor() - bytes.start(),
+            )));
         } else if b == b'\n' {
-            return Ok(Status::Complete(HeaderParsed::Eof(bytes.cursor() - start)));
+            return Ok(Status::Complete(HeaderParsed::Eof(
+                bytes.cursor() - bytes.start(),
+            )));
+        } else if !utils::is_header_name_token(b) {
+            return Err(Error::HeaderName);
         }
+        bytes.st.state = 1;
+        header.name.start = bytes.cursor() - 1;
+    }
 
-        // parse header name until colon
-        {
-            if !utils::is_header_name_token(b) {
-                return Err(Error::HeaderName);
-            }
-            header.name.start = bytes.cursor() - 1;
-
-            simd::match_header_name_vectored(bytes);
-            if next_st!(1, bytes) == b':' {
-                // SAFETY: previously bumped by 1 with next! -> always safe.
-                header.name.end = bytes.cursor() - 1;
-                bytes.commit();
-                bytes.st.state = 1;
-            } else {
-                return Err(Error::HeaderName);
-            }
+    // parse header name until colon
+    if bytes.st.state == 1 {
+        simd::match_header_name_vectored(bytes);
+        if next!(bytes) == b':' {
+            // SAFETY: previously bumped by 1 with next! -> always safe.
+            bytes.st.state = 2;
+            header.name.end = bytes.cursor() - 1;
+        } else {
+            return Err(Error::HeaderName);
         }
     }
 
     let mut b;
 
     // header value start position
-    if bytes.st.state == 1 {
+    if bytes.st.state == 2 {
         // eat white space between colon and value
         'whitespace_after_colon: loop {
             b = next!(bytes);
@@ -93,8 +96,7 @@ fn parse_header_iter_uninit(
                 continue 'whitespace_after_colon;
             }
             if utils::is_header_value_token(b) {
-                bytes.commit();
-                bytes.st.state = 2;
+                bytes.st.state = 3;
                 header.value.start = bytes.cursor() - 1;
                 break 'whitespace_after_colon;
             }
@@ -108,17 +110,17 @@ fn parse_header_iter_uninit(
             // This produces an empty slice that points to the beginning
             // of the whitespace.
             header.value.reset();
+            bytes.st.state = 0;
+            bytes.commit();
             return Ok(Status::Complete(HeaderParsed::Header(bytes.cursor())));
         }
     }
 
     // header value
-    if bytes.st.state == 2 {
+    if bytes.st.state == 3 {
         // parse value till EOL
         {
             simd::match_header_value_vectored(bytes);
-
-            header.value.end = bytes.cursor();
 
             // check ctl
             let b = next!(bytes);
@@ -141,6 +143,8 @@ fn parse_header_iter_uninit(
             header.value.end = bytes.cursor() - n + 1;
         }
     }
+    bytes.st.state = 0;
+    bytes.commit();
 
     Ok(Status::Complete(HeaderParsed::Header(bytes.cursor())))
 }

@@ -1006,6 +1006,57 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_headers_with_state() {
+        const B1: &[u8] = b"Host";
+        const B2: &[u8] = b"Host: \t";
+        const B3: &[u8] = b"Host: \tfoo.com\t ";
+        const B4: &[u8] = b"Host: \tfoo.com\t \r\nCoo";
+        const B5: &[u8] = b"Host: \tfoo.com\t \r\nCookie: \t \r\n\r\n";
+
+        let mut st = State::default();
+        let mut header = Header::default();
+        assert!(header.parse_with_state(B1, &mut st).unwrap().is_partial());
+        assert_eq!(st.state, 1);
+        assert_eq!(st.start, 0);
+        assert_eq!(st.cursor, 4);
+        assert_eq!(header.name, SlicePos { start: 0, end: 0 });
+        assert!(header.parse_with_state(B2, &mut st).unwrap().is_partial());
+        assert_eq!(st.state, 2);
+        assert_eq!(st.start, 0);
+        assert_eq!(st.cursor, 7);
+        assert_eq!(header.name, SlicePos { start: 0, end: 4 });
+        assert_eq!(&B5[header.name.start..header.name.end], b"Host");
+
+        assert!(header.parse_with_state(B3, &mut st).unwrap().is_partial());
+        assert_eq!(st.state, 3);
+        assert_eq!(st.start, 0);
+        assert_eq!(st.cursor, 16);
+        assert_eq!(header.name, SlicePos { start: 0, end: 4 });
+        assert_eq!(header.value, SlicePos { start: 7, end: 0 });
+
+        assert!(header.parse_with_state(B4, &mut st).unwrap().is_complete());
+        assert_eq!(st.state, 0);
+        assert_eq!(st.start, 18);
+        assert_eq!(st.cursor, 18);
+        assert_eq!(header.value, SlicePos { start: 7, end: 14 });
+        assert_eq!(&B5[header.value.start..header.value.end], b"foo.com");
+
+        assert!(header.parse_with_state(B5, &mut st).unwrap().is_complete());
+        assert_eq!(st.state, 0);
+        assert_eq!(st.start, 30);
+        assert_eq!(st.cursor, 30);
+        assert_eq!(header.name, SlicePos { start: 18, end: 24 });
+        assert_eq!(header.value, SlicePos { start: 0, end: 0 });
+        assert_eq!(&B5[header.name.start..header.name.end], b"Cookie");
+        assert_eq!(&B5[header.value.start..header.value.end], b"");
+
+        assert!(header.parse_with_state(B5, &mut st).unwrap().is_complete());
+        assert_eq!(st.state, 0);
+        assert_eq!(st.start, 30);
+        assert_eq!(st.cursor, 32);
+    }
+
     headers_err! {
         test_headers_with_obsolete_line_folding_at_start,
         b"Line-Folded-Header: \r\n   \r\n hello there\r\n\r\n",

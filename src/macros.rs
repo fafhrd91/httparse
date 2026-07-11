@@ -9,18 +9,6 @@ macro_rules! next {
     }};
 }
 
-macro_rules! next_st {
-    ($st:expr, $bytes:ident) => {{
-        match $bytes.next() {
-            Some(b) => b,
-            None => {
-                $bytes.st.state = $st;
-                return Ok(Status::Partial);
-            }
-        }
-    }};
-}
-
 macro_rules! expect {
     ($bytes:ident.next() == $pat:pat_param => $ret:expr) => {
         expect!(next!($bytes) => $pat |? $ret)
