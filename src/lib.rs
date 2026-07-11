@@ -1,8 +1,4 @@
-#![deny(
-    clippy::pedantic,
-    clippy::missing_safety_doc,
-    clippy::undocumented_unsafe_blocks
-)]
+#![deny(clippy::pedantic, clippy::missing_safety_doc)]
 #![allow(
     clippy::cast_lossless,
     clippy::cast_possible_truncation,
@@ -94,7 +90,6 @@ impl std::error::Error for Error {
 }
 
 /// An error in parsing a chunk size.
-// Note: Move this into the error enum once v2.0 is released.
 #[derive(Debug, PartialEq, Eq)]
 pub struct InvalidChunkSize;
 
@@ -155,6 +150,15 @@ impl<T> Status<T> {
 }
 
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
+pub struct State {
+    // state
+    pub state: u8,
+    // bytes
+    pub start: usize,
+    pub cursor: usize,
+}
+
+#[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
 /// A slice position.
 pub struct SlicePos {
     pub start: usize,
@@ -195,14 +199,38 @@ impl Request {
     #[inline]
     /// Parse request
     pub fn parse(&mut self, src: &[u8]) -> Result<usize> {
-        let mut bytes = Bytes::new(src);
+        let mut st = State::default();
+        self.parse_with_state(src, &mut st)
+    }
 
-        self.method = complete!(parse_method_inner(&mut bytes));
-        self.path = complete!(parse_uri_inner(&mut bytes)).1;
-        self.version = complete!(version::parse_version_inner(&mut bytes));
+    #[inline]
+    /// Parse request
+    pub fn parse_with_state(&mut self, src: &[u8], st: &mut State) -> Result<usize> {
+        if st.state == 0 {
+            let mut tmp = State::default();
+            let mut bytes = Bytes::new(src, &mut tmp);
+            self.method = complete!(parse_method_inner(&mut bytes));
+            st.state = 1;
+            st.start = bytes.st.start;
+            st.cursor = bytes.st.cursor;
+        }
+        if st.state == 1 {
+            let mut bytes = Bytes::new(src, st);
+            self.path = complete!(parse_uri_inner(&mut bytes));
+            bytes.st.state = 2;
+        }
+        if st.state == 2 {
+            let mut tmp = *st;
+            let mut bytes = Bytes::new(src, &mut tmp);
+            self.version = complete!(version::parse_version_inner(&mut bytes));
+            st.state = 3;
+            st.start = bytes.st.start;
+            st.cursor = bytes.st.cursor;
+        }
 
+        let mut bytes = Bytes::new(src, st);
         newline!(bytes);
-        Ok(Status::Complete(bytes.slice_pos()))
+        Ok(Status::Complete(bytes.cursor()))
     }
 }
 
@@ -221,7 +249,8 @@ impl Response {
     #[inline]
     /// Parse response code and reason
     pub fn parse(&mut self, src: &[u8]) -> Result<usize> {
-        let mut bytes = Bytes::new(src);
+        let mut st = State::default();
+        let mut bytes = Bytes::new(src, &mut st);
 
         complete!(utils::skip_empty_lines(&mut bytes));
 
@@ -262,14 +291,17 @@ impl Response {
             _ => return Err(Error::Status),
         };
 
-        Ok(Status::Complete(bytes.slice_pos()))
+        Ok(Status::Complete(bytes.cursor()))
     }
 }
 
 #[inline]
 // WARNING: Exported for internal benchmarks, not fit for public consumption
 pub fn parse_method(src: &[u8]) -> Result<&str> {
-    let s = complete!(parse_method_inner(&mut Bytes::new(src)));
+    let s = complete!(parse_method_inner(&mut Bytes::new(
+        src,
+        &mut State::default()
+    )));
     // SAFETY: parse_method_inner verifies validity of method
     let m = unsafe { str::from_utf8_unchecked(&src[s.start..s.end]) };
     Ok(Status::Complete(m))
@@ -277,7 +309,7 @@ pub fn parse_method(src: &[u8]) -> Result<&str> {
 
 #[inline]
 // WARNING: Exported for internal benchmarks, not fit for public consumption
-fn parse_method_inner(bytes: &mut Bytes<'_>) -> Result<SlicePos> {
+fn parse_method_inner(bytes: &mut Bytes<'_, '_>) -> Result<SlicePos> {
     const GET: [u8; 4] = *b"GET ";
     const POST: [u8; 4] = *b"POST";
 
@@ -285,25 +317,20 @@ fn parse_method_inner(bytes: &mut Bytes<'_>) -> Result<SlicePos> {
 
     match bytes.peek_n::<4>() {
         Some(GET) => {
-            // SAFETY: we matched "GET " which has 4 bytes and is ASCII
-            let method = unsafe {
-                bytes.advance(4); // advance cursor past "GET "
-                bytes.slice_position(1)
-            };
+            // we matched "GET " which has 4 bytes and is ASCII
+            bytes.advance(4); // advance cursor past "GET "
+            let method = bytes.slice_position(1);
             complete!(utils::skip_spaces(bytes));
             Ok(Status::Complete(method))
         }
-        // SAFETY:
         // If `bytes.peek_n...` returns a Some([u8; 4]),
         // then we are assured that `bytes` contains at least 4 bytes.
         // Thus `bytes.len() >= 4`,
         // and it is safe to peek at byte 4 with `bytes.peek_ahead(4)`.
-        Some(POST) if unsafe { bytes.peek_ahead(4) } == Some(b' ') => {
-            // SAFETY: we matched "POST " which has 5 bytes
-            let method = unsafe {
-                bytes.advance(5); // advance cursor past "POST "
-                bytes.slice_position(1)
-            };
+        Some(POST) if bytes.peek_ahead(4) == Some(b' ') => {
+            // we matched "POST " which has 5 bytes
+            bytes.advance(5); // advance cursor past "POST "
+            let method = bytes.slice_position(1);
             complete!(utils::skip_spaces(bytes));
             Ok(Status::Complete(method))
         }
@@ -343,7 +370,7 @@ fn parse_method_inner(bytes: &mut Bytes<'_>) -> Result<SlicePos> {
 /// > Non-US-ASCII content in header fields and the reason phrase
 /// > has been obsoleted and made opaque (the TEXT rule was removed).
 #[inline]
-fn parse_reason(bytes: &mut Bytes<'_>) -> Result<SlicePos> {
+fn parse_reason(bytes: &mut Bytes<'_, '_>) -> Result<SlicePos> {
     let mut seen_obs_text = false;
     loop {
         let b = next!(bytes);
@@ -388,11 +415,16 @@ fn parse_reason(bytes: &mut Bytes<'_>) -> Result<SlicePos> {
 
 #[inline]
 #[allow(missing_docs)]
-// WARNING: Exported for internal benchmarks, not fit for public consumption
+/// Parse request path
 pub fn parse_uri(src: &[u8]) -> Result<&str> {
-    let mut bytes = Bytes::new(src);
-    if let Status::Complete((path, _)) = parse_uri_inner(&mut bytes)? {
-        Ok(Status::Complete(path))
+    let mut st = State::default();
+    let mut bytes = Bytes::new(src, &mut st);
+    if let Status::Complete(pos) = parse_uri_inner(&mut bytes)? {
+        if let Ok(path) = simdutf8::basic::from_utf8(&src[pos.start..pos.end]) {
+            Ok(Status::Complete(path))
+        } else {
+            Err(Error::Token)
+        }
     } else {
         Ok(Status::Partial)
     }
@@ -400,34 +432,28 @@ pub fn parse_uri(src: &[u8]) -> Result<&str> {
 
 #[inline]
 // WARNING: Exported for internal benchmarks, not fit for public consumption
-fn parse_uri_inner<'a>(bytes: &mut Bytes<'a>) -> Result<(&'a str, SlicePos)> {
-    let start = bytes.slice_pos();
-    let b_start = bytes.pos();
+fn parse_uri_inner(bytes: &mut Bytes<'_, '_>) -> Result<SlicePos> {
+    let start = bytes.start();
     simd::match_uri_vectored(bytes);
-    let b_end = bytes.pos();
+    let b_end = bytes.cursor();
 
     if next!(bytes) == b' ' {
         // URI must have at least one char
-        if b_end == b_start {
+        if start == b_end {
             return Err(Error::Token);
         }
 
         // SAFETY: all bytes up till `i` must have been `is_token` and therefore also utf-8.
-        let uri = unsafe { bytes.slice_skip(1) };
-        if let Ok(path) = simdutf8::basic::from_utf8(uri) {
-            let end = bytes.slice_pos() - 1;
-            complete!(utils::skip_spaces(bytes));
-            Ok(Status::Complete((path, SlicePos { start, end })))
-        } else {
-            Err(Error::Token)
-        }
+        let end = bytes.cursor() - 1;
+        complete!(utils::skip_spaces(bytes));
+        Ok(Status::Complete(SlicePos { start, end }))
     } else {
         Err(Error::Token)
     }
 }
 
 #[inline]
-fn parse_code(bytes: &mut Bytes<'_>) -> Result<u16> {
+fn parse_code(bytes: &mut Bytes<'_, '_>) -> Result<u16> {
     let hundreds = expect!(bytes.next() == b'0'..=b'9' => Err(Error::Status));
     let tens = expect!(bytes.next() == b'0'..=b'9' => Err(Error::Status));
     let ones = expect!(bytes.next() == b'0'..=b'9' => Err(Error::Status));
@@ -451,7 +477,8 @@ fn parse_code(bytes: &mut Bytes<'_>) -> Result<u16> {
 /// ```
 pub fn parse_chunk_size(buf: &[u8]) -> result::Result<Status<(usize, u64)>, InvalidChunkSize> {
     const RADIX: u64 = 16;
-    let mut bytes = Bytes::new(buf);
+    let mut st = State::default();
+    let mut bytes = Bytes::new(buf, &mut st);
     let mut size = 0;
     let mut in_chunk_size = true;
     let mut in_ext = false;
@@ -510,7 +537,7 @@ pub fn parse_chunk_size(buf: &[u8]) -> result::Result<Status<(usize, u64)>, Inva
             _ => return Err(InvalidChunkSize),
         }
     }
-    Ok(Status::Complete((bytes.slice_pos(), size)))
+    Ok(Status::Complete((bytes.cursor(), size)))
 }
 
 #[cfg(test)]
@@ -1645,10 +1672,14 @@ mod tests {
         }
     }
 
-    req_err! {
-        test_bad_utf8_in_path,
-        b"GET /test?post=I\xE2msorryIforkedyou HTTP/1.1\r\nHost: example.org\r\n\r\n",
-        Err(Error::Token)
+    #[test]
+    fn test_bad_utf8_in_path() {
+        const BUF: &[u8] =
+            b"GET /test?post=I\xE2msorryIforkedyou HTTP/1.1\r\nHost: example.org\r\n\r\n";
+
+        let mut req = Request::default();
+        assert!(req.parse(BUF).unwrap().is_complete());
+        assert!(str::from_utf8(&BUF[req.path.start..req.path.end]).is_err());
     }
 
     #[rustfmt::skip]

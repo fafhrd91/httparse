@@ -4,7 +4,6 @@ use crate::iter::Bytes;
 pub unsafe fn match_uri_vectored(bytes: &mut Bytes) {
     while bytes.as_ref().len() >= 16 {
         let advance = match_url_char_16_sse(bytes.as_ref());
-
         bytes.advance(advance);
 
         if advance != 16 {
@@ -124,15 +123,16 @@ fn sse_code_matches_header_value_chars_table() {
 #[allow(clippy::missing_safety_doc)]
 #[cfg(test)]
 unsafe fn byte_is_allowed(byte: u8, f: unsafe fn(bytes: &mut Bytes<'_>)) -> bool {
+    let mut st = crate::State::default();
     let slice = [
         b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', byte, b'_', b'_', b'_', b'_',
         b'_',
     ];
-    let mut bytes = Bytes::new(&slice);
+    let mut bytes = Bytes::new(&slice, &mut st);
 
     f(&mut bytes);
 
-    match bytes.pos() {
+    match bytes.cursor() - bytes.start() {
         16 => true,
         10 => false,
         _ => unreachable!(),

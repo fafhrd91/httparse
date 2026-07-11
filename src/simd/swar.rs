@@ -11,11 +11,9 @@ pub fn match_uri_vectored(bytes: &mut Bytes) {
     loop {
         if let Some(bytes8) = bytes.peek_n::<BLOCK_SIZE>() {
             let n = match_uri_char_8_swar(bytes8);
-            // SAFETY: using peek_n to retrieve the bytes ensures that there are at least n more bytes
+            // using peek_n to retrieve the bytes ensures that there are at least n more bytes
             // in `bytes`, so calling `advance(n)` is safe.
-            unsafe {
-                bytes.advance(n);
-            }
+            bytes.advance(n);
             if n == BLOCK_SIZE {
                 continue;
             }
@@ -23,11 +21,9 @@ pub fn match_uri_vectored(bytes: &mut Bytes) {
         if let Some(b) = bytes.peek()
             && utils::is_uri_token(b)
         {
-            // SAFETY: using peek to retrieve the byte ensures that there is at least 1 more byte
+            // using peek to retrieve the byte ensures that there is at least 1 more byte
             // in bytes, so calling advance is safe.
-            unsafe {
-                bytes.advance(1);
-            }
+            bytes.advance(1);
             continue;
         }
         break;
@@ -39,11 +35,9 @@ pub fn match_header_value_vectored(bytes: &mut Bytes) {
     loop {
         if let Some(bytes8) = bytes.peek_n::<BLOCK_SIZE>() {
             let n = match_header_value_char_8_swar(bytes8);
-            // SAFETY: using peek_n to retrieve the bytes ensures that there are at least n more bytes
+            // using peek_n to retrieve the bytes ensures that there are at least n more bytes
             // in `bytes`, so calling `advance(n)` is safe.
-            unsafe {
-                bytes.advance(n);
-            }
+            bytes.advance(n);
             if n == BLOCK_SIZE {
                 continue;
             }
@@ -51,11 +45,9 @@ pub fn match_header_value_vectored(bytes: &mut Bytes) {
         if let Some(b) = bytes.peek()
             && utils::is_header_value_token(b)
         {
-            // SAFETY: using peek to retrieve the byte ensures that there is at least 1 more byte
+            // using peek to retrieve the byte ensures that there is at least 1 more byte
             // in bytes, so calling advance is safe.
-            unsafe {
-                bytes.advance(1);
-            }
+            bytes.advance(1);
             continue;
         }
         break;
@@ -66,18 +58,16 @@ pub fn match_header_value_vectored(bytes: &mut Bytes) {
 pub fn match_header_name_vectored(bytes: &mut Bytes) {
     while let Some(block) = bytes.peek_n::<BLOCK_SIZE>() {
         let n = match_block(utils::is_header_name_token, block);
-        // SAFETY: using peek_n to retrieve the bytes ensures that there are at least n more bytes
+        // using peek_n to retrieve the bytes ensures that there are at least n more bytes
         // in `bytes`, so calling `advance(n)` is safe.
-        unsafe {
-            bytes.advance(n);
-        }
+        bytes.advance(n);
         if n != BLOCK_SIZE {
             return;
         }
     }
-    // SAFETY: match_tail processes at most the remaining data in `bytes`. advances `bytes` to the
+    // match_tail processes at most the remaining data in `bytes`. advances `bytes` to the
     // end, but no further.
-    unsafe { bytes.advance(match_tail(utils::is_header_name_token, bytes.as_ref())) };
+    bytes.advance(match_tail(utils::is_header_name_token, bytes.as_ref()));
 }
 
 // Matches "tail", i.e: when we have <BLOCK_SIZE bytes in the buffer, should be uncommon

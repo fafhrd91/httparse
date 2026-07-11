@@ -1,5 +1,6 @@
-use crate::iter::Bytes;
 use core::arch::aarch64::*;
+
+use crate::iter::Bytes;
 
 #[inline]
 pub fn match_header_name_vectored(bytes: &mut Bytes) {
@@ -237,14 +238,15 @@ fn neon_code_matches_header_name_chars_table() {
 }
 
 #[cfg(test)]
-unsafe fn byte_is_allowed(byte: u8, f: unsafe fn(bytes: &mut Bytes<'_>)) -> bool {
+unsafe fn byte_is_allowed(byte: u8, f: unsafe fn(bytes: &mut Bytes<'_, '_>)) -> bool {
+    let mut st = crate::State::default();
     let mut slice = [b'_'; 16];
     slice[10] = byte;
-    let mut bytes = Bytes::new(&slice);
+    let mut bytes = Bytes::new(&slice, &mut st);
 
     f(&mut bytes);
 
-    match bytes.pos() {
+    match bytes.cursor() - bytes.start() {
         16 => true,
         10 => false,
         x => panic!("unexpected pos: {x}"),

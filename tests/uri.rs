@@ -1,4 +1,4 @@
-use ntex_httparse::{Error, Header, HeaderParsed, Request, Status};
+use ntex_httparse::{Error, Header, HeaderParsed, Request, State, Status};
 
 macro_rules! req {
     ($name:ident, $buf:expr, |$len:ident, $method:ident, $path:ident, $version:ident, $headers:ident, $headers_eof:ident| $body:expr) => {
@@ -3797,4 +3797,28 @@ req! {
         assert_eq!(_len, 254);
         assert!(eof);
     }
+}
+
+#[test]
+fn urltest_partial() {
+    const BUF1: &[u8] = b"GET /foo/";
+    const BUF2: &[u8] = b"GET /foo/:foo.com/ HTTP/";
+    const BUF3: &[u8] = b"GET /foo/:foo.com/ HTTP/1.1\r\nHost: example.org\r\n\r\n";
+
+    let mut st = State::default();
+    let mut req = Request::default();
+    assert!(req.parse_with_state(BUF1, &mut st).unwrap().is_partial());
+    assert_eq!(st.start, 4);
+    assert_eq!(st.cursor, 9);
+    assert_eq!(&BUF1[st.start..st.cursor], b"/foo/");
+
+    assert!(req.parse_with_state(BUF2, &mut st).unwrap().is_partial());
+    assert_eq!(st.start, 19);
+    assert_eq!(st.cursor, 19);
+    assert_eq!(&BUF2[req.path.start..req.path.end], b"/foo/:foo.com/");
+
+    assert!(req.parse_with_state(BUF3, &mut st).unwrap().is_complete());
+    assert_eq!(st.start, 29);
+    assert_eq!(st.cursor, 29);
+    assert_eq!(&BUF2[req.path.start..req.path.end], b"/foo/:foo.com/");
 }

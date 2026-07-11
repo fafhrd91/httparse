@@ -181,16 +181,17 @@ fn avx2_code_matches_header_value_chars_table() {
 
 #[cfg(test)]
 unsafe fn byte_is_allowed(byte: u8, f: unsafe fn(bytes: &mut Bytes<'_>)) -> bool {
+    let mut st = crate::State::default();
     let slice = [
         b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_',
         b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', byte, b'_', b'_', b'_',
         b'_', b'_',
     ];
-    let mut bytes = Bytes::new(&slice);
+    let mut bytes = Bytes::new(&slice, &mut st);
 
     f(&mut bytes);
 
-    match bytes.pos() {
+    match bytes.cursor() - bytes.start() {
         32 => true,
         26 => false,
         _ => unreachable!(),
