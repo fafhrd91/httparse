@@ -103,7 +103,7 @@ mod avx2_compile_time {
     }
 
     #[inline(always)]
-    pub fn match_uri_vectored(b: &mut crate::iter::Bytes<'_>) {
+    pub fn match_uri_vectored(b: &mut crate::iter::Bytes<'_, '_>) {
         unsafe { super::avx2::match_uri_vectored(b) }
     }
 
