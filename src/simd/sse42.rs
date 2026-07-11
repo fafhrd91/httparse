@@ -122,7 +122,7 @@ fn sse_code_matches_header_value_chars_table() {
 
 #[allow(clippy::missing_safety_doc)]
 #[cfg(test)]
-unsafe fn byte_is_allowed(byte: u8, f: unsafe fn(bytes: &mut Bytes<'_>)) -> bool {
+unsafe fn byte_is_allowed(byte: u8, f: unsafe fn(bytes: &mut Bytes<'_, '_>)) -> bool {
     let mut st = crate::State::default();
     let slice = [
         b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', b'_', byte, b'_', b'_', b'_', b'_',
