@@ -3,7 +3,7 @@ on:
   pull_request:
   push:
     branches:
-      - master
+      - main
 
 env:
   RUST_BACKTRACE: 1
@@ -135,7 +135,7 @@ jobs:
         with:
           components: clippy
       - name: Run clippy
-        run: cargo clippy --all-targets --all-features
+        run: cargo clippy --all-targets --all-features -- -D warnings
 
   miri:
     name: Test with Miri
@@ -173,11 +173,11 @@ jobs:
           sudo apt-get install -y qemu-user gcc-aarch64-linux-gnu
 
       - name: Build tests
-        run: cargo build --tests --target aarch64-unknown-linux-gnu
+        run: cargo test --no-run --target aarch64-unknown-linux-gnu --message-format=json | jq -r 'select(.executable != null) | .executable' > test-binaries.txt
 
       - name: Run tests with QEMU
         run: |
-          test_binaries=$(find target/aarch64-unknown-linux-gnu/debug/deps/ -type f -executable -name 'httparse-*')
+          test_binaries=$(cat test-binaries.txt)
           if [ -n "$test_binaries" ]; then
             for test_binary in $test_binaries
             do
@@ -186,4 +186,5 @@ jobs:
             done
           else
             echo "No test binaries found."
+            exit 1
           fi
