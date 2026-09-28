@@ -2,6 +2,19 @@
 
 ## [2.2.0] - 2026-09-28
 
+* `Request::parse_with_state` is fully resumable: every part of the request
+  line, including the method and leading empty lines, continues where the
+  previous `Partial` result stopped instead of being rescanned
+
+* Add `Response::parse_with_state`, a resumable status line parser.
+  `Request::parse` and `Response::parse` are kept for compatibility
+
+* Multiple spaces between the method and the path are accepted for every
+  method, not only `GET` and `POST`
+
+* A bare CR before the request or status line is rejected when the input is
+  split right after it
+
 * `parse_chunk_size` rejects control characters other than HTAB in chunk
   extensions. Previously any octet was accepted, so a bare LF inside an
   extension could be treated as the line end by other parsers (request

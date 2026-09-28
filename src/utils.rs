@@ -59,7 +59,7 @@ pub(crate) fn skip_empty_lines(bytes: &mut Bytes<'_, '_>) -> Result<()> {
             Some(b'\r') => {
                 // peeked and found `\r`, so it's safe to bump 1 pos
                 bytes.advance(1);
-                expect!(bytes.next() == b'\n' => Err(Error::NewLine));
+                expect_lf!(bytes => Err(Error::NewLine));
             }
             Some(b'\n') => {
                 // peeked and found `\n`, so it's safe to bump 1 pos
