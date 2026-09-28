@@ -1458,7 +1458,13 @@ mod tests {
     #[test]
     fn test_response_reason_bytes_at_every_position() {
         const PREFIX: &[u8] = b"HTTP/1.1 200 ";
-        for len in 1..80 {
+        // miri is too slow for the full matrix, check the block boundaries
+        let lens: Vec<usize> = if cfg!(miri) {
+            vec![1, 8, 9, 17, 33]
+        } else {
+            (1..80).collect()
+        };
+        for len in lens {
             for pos in 0..len {
                 for b in [b'\t', b' ', b'~', 0x00, 0x0b, 0x7f, 0x80, 0xff] {
                     let mut reason = vec![b'a'; len];
@@ -1467,7 +1473,13 @@ mod tests {
                     let valid = b == b'\t' || b == b' ' || b == b'~' || b >= 0x80;
 
                     // parse at once and resumed at every split point
-                    for split in PREFIX.len()..=buf.len() {
+                    let splits: Vec<usize> = if cfg!(miri) {
+                        let at = PREFIX.len() + pos;
+                        vec![PREFIX.len(), at, at + 1, buf.len()]
+                    } else {
+                        (PREFIX.len()..=buf.len()).collect()
+                    };
+                    for split in splits {
                         let mut resp = Response::default();
                         let mut st = State::default();
                         let first = resp.parse_with_state(&buf[..split], &mut st);
@@ -1806,9 +1818,21 @@ mod tests {
     #[test]
     fn test_header_name_chars_at_every_position() {
         // covers the scalar prefix, the SIMD blocks and the tail
-        for len in [1, 15, 16, 17, 31, 32, 33, 47, 48, 70] {
+        let (lens, bytes): (&[usize], Vec<u8>) = if cfg!(miri) {
+            // miri is too slow for the full matrix
+            let bytes = [
+                0x00, b'\t', b' ', b'!', b'"', b'x', b':', b'~', 0x7f, 0x80, 0xff,
+            ];
+            (&[1, 16, 17, 33], bytes.to_vec())
+        } else {
+            (
+                &[1, 15, 16, 17, 31, 32, 33, 47, 48, 70],
+                (0..=255).collect(),
+            )
+        };
+        for &len in lens {
             for pos in 1..len {
-                for b in 0..=255_u8 {
+                for &b in &bytes {
                     let mut buf = vec![b'x'; len];
                     buf[pos] = b;
                     buf.extend_from_slice(b": v\r\n");
