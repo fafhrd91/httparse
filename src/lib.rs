@@ -526,7 +526,10 @@ pub fn parse_chunk_size(buf: &[u8]) -> result::Result<Status<(usize, u64)>, Inva
             b'\t' | b' ' if !in_ext && !in_chunk_size => {}
             // LWS can follow the chunk size, but no more digits can come
             b'\t' | b' ' if in_chunk_size => in_chunk_size = false,
-            // We allow any arbitrary octet once we are in the extension, since
+            // Control characters other than HTAB are not allowed in extensions,
+            // a bare LF could be treated as the line end by other parsers.
+            0x00..=0x08 | 0x0a..=0x1f | 0x7f if in_ext => return Err(InvalidChunkSize),
+            // We allow any other octet once we are in the extension, since
             // they all get ignored anyway. According to the HTTP spec, valid
             // extensions would have a more strict syntax:
             //     (token ["=" (token | quoted-string)])
@@ -1406,6 +1409,27 @@ mod tests {
         assert_eq!(
             parse_chunk_size(b"fffffffffffffffff\r\n"),
             Err(crate::InvalidChunkSize)
+        );
+    }
+
+    #[test]
+    fn test_chunk_size_extension_control_chars() {
+        for buf in [
+            &b"4;a\nX\r\n"[..],
+            b"4;a=\"\nX\"\r\n",
+            b"4;a\x00\r\n",
+            b"4;a\x7f\r\n",
+            b"4;\n",
+        ] {
+            assert_eq!(
+                parse_chunk_size(buf),
+                Err(crate::InvalidChunkSize),
+                "{buf:?}"
+            );
+        }
+        assert_eq!(
+            parse_chunk_size(b"4 ;a=\"b\tc \x80\";d\t\r\n"),
+            Ok(Status::Complete((17, 4)))
         );
     }
 
