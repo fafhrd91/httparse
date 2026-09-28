@@ -1,7 +1,9 @@
 use crate::{Error, Result, State, Status, iter::Bytes};
 
 #[inline]
-/// Parse request's version
+/// Parse an HTTP version, `HTTP/1.0` or `HTTP/1.1`.
+///
+/// Returns `0` for HTTP/1.0 and `1` for HTTP/1.1.
 pub fn parse_version(src: &[u8]) -> Result<u8> {
     let mut st = State::default();
     let mut bytes = Bytes::new(src, &mut st);

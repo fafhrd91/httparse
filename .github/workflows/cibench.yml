@@ -1,7 +1,7 @@
 name: CI Benchmarks
 on:
   pull_request:
-    branches: [master]
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,7 +25,7 @@ jobs:
 
       - name: Run benchmarks (master)
         run: |
-          git checkout master
+          git checkout main
           cargo bench --bench parse -- --save-baseline master
 
       - name: Run benchmarks (PR)
@@ -66,7 +66,7 @@ jobs:
 
       - name: Run benchmarks (master)
         run: |
-          git checkout master
+          git checkout main
           cargo bench --bench parse -- --save-baseline master-${{ matrix.feature }}
 
       - name: Run benchmarks (PR)
@@ -103,7 +103,7 @@ jobs:
 
       - name: Run benchmarks (master)
         run: |
-          git checkout master
+          git checkout main
           cargo bench --bench parse -- --save-baseline master-aarch64-${{ matrix.feature }}
 
       - name: Run benchmarks (PR)

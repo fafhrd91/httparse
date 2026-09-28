@@ -2,6 +2,58 @@ use crate::iter::Bytes;
 
 #[inline]
 #[target_feature(enable = "avx2")]
+pub unsafe fn match_header_name_vectored(bytes: &mut Bytes) {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::*;
+
+    // see `sse42::match_header_name_char_16_sse`, `vpshufb` works on each
+    // 128-bit lane separately, so the tables are duplicated in both lanes
+    let bitmap = _mm_loadu_si128(crate::utils::TOKEN_NIBBLES.as_ptr() as *const _);
+    let bits = _mm_setr_epi8(1, 2, 4, 8, 16, 32, 64, -128, 1, 2, 4, 8, 16, 32, 64, -128);
+
+    while bytes.as_ref().len() >= 32 {
+        let bitmap = _mm256_broadcastsi128_si256(bitmap);
+        let bits = _mm256_broadcastsi128_si256(bits);
+        let dat = _mm256_lddqu_si256(bytes.as_ref().as_ptr() as *const _);
+        let rows = _mm256_shuffle_epi8(
+            bitmap,
+            _mm256_and_si256(dat, _mm256_set1_epi8(0x8f_u8.cast_signed())),
+        );
+        let hi = _mm256_and_si256(_mm256_srli_epi16(dat, 4), _mm256_set1_epi8(0x0f));
+        let bit = _mm256_shuffle_epi8(bits, hi);
+        let ok = _mm256_cmpeq_epi8(_mm256_and_si256(rows, bit), bit);
+        let advance = (_mm256_movemask_epi8(ok) as u32).trailing_ones() as usize;
+        bytes.advance(advance);
+
+        if advance != 32 {
+            return;
+        }
+    }
+
+    // header names are short, check 16 bytes before falling back to SWAR
+    if bytes.as_ref().len() >= 16 {
+        let dat = _mm_lddqu_si128(bytes.as_ref().as_ptr() as *const _);
+        let rows = _mm_shuffle_epi8(
+            bitmap,
+            _mm_and_si128(dat, _mm_set1_epi8(0x8f_u8.cast_signed())),
+        );
+        let hi = _mm_and_si128(_mm_srli_epi16(dat, 4), _mm_set1_epi8(0x0f));
+        let bit = _mm_shuffle_epi8(bits, hi);
+        let ok = _mm_cmpeq_epi8(_mm_and_si128(rows, bit), bit);
+        let advance = (_mm_movemask_epi8(ok) as u16).trailing_ones() as usize;
+        bytes.advance(advance);
+
+        if advance != 16 {
+            return;
+        }
+    }
+    super::swar::match_header_name_vectored(bytes);
+}
+
+#[inline]
+#[target_feature(enable = "avx2")]
 pub unsafe fn match_uri_vectored(bytes: &mut Bytes) {
     while bytes.as_ref().len() >= 32 {
         let advance = match_url_char_32_avx(bytes.as_ref());
@@ -176,6 +228,48 @@ fn avx2_code_matches_header_value_chars_table() {
                 "byte_is_allowed({b:?}) should be {allowed:?}"
             );
         }
+    }
+}
+
+#[test]
+fn avx2_code_matches_header_name_chars_table() {
+    if !is_x86_feature_detected!("avx2") {
+        return;
+    }
+
+    #[allow(clippy::undocumented_unsafe_blocks)]
+    unsafe {
+        assert!(byte_is_allowed(b'_', match_header_name_vectored));
+
+        for (b, allowed) in crate::utils::TOKEN_MAP.iter().copied().enumerate() {
+            assert_eq!(
+                byte_is_allowed(b as u8, match_header_name_vectored),
+                allowed,
+                "byte_is_allowed({b:?}) should be {allowed:?}"
+            );
+            // the 16-byte step
+            assert_eq!(
+                byte_is_allowed_16(b as u8, match_header_name_vectored),
+                allowed,
+                "byte_is_allowed_16({b:?}) should be {allowed:?}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+unsafe fn byte_is_allowed_16(byte: u8, f: unsafe fn(bytes: &mut Bytes<'_, '_>)) -> bool {
+    let mut st = crate::State::default();
+    let mut slice = [b'_'; 20];
+    slice[10] = byte;
+    let mut bytes = Bytes::new(&slice, &mut st);
+
+    f(&mut bytes);
+
+    match bytes.cursor() - bytes.start() {
+        20 => true,
+        10 => false,
+        _ => unreachable!(),
     }
 }
 

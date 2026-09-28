@@ -30,8 +30,19 @@ fn get_runtime_feature() -> u8 {
     feature
 }
 
+#[inline]
 pub fn match_header_name_vectored(bytes: &mut Bytes) {
-    super::swar::match_header_name_vectored(bytes);
+    if !super::swar::match_header_name_prefix::<16>(bytes) {
+        return;
+    }
+    // SAFETY: calls are guarded by a feature check
+    unsafe {
+        match get_runtime_feature() {
+            AVX2 => avx2::match_header_name_vectored(bytes),
+            SSE42 => sse42::match_header_name_vectored(bytes),
+            _ /* NOP */ => super::swar::match_header_name_vectored(bytes),
+        }
+    }
 }
 
 pub fn match_uri_vectored(bytes: &mut Bytes) {

@@ -17,6 +17,22 @@ pub(crate) static HEADER_VALUE_MAP: [bool; 256] = byte_map!(
     b'\t' | b' '..=0x7e | 0x80..=0xFF
 );
 
+/// `TOKEN_MAP` as a nibble bitmap for SIMD table lookups: bit `hi` of entry
+/// `lo` is set if byte `hi << 4 | lo` is a token char. Only bytes below 0x80
+/// can be token chars.
+#[allow(dead_code)]
+pub(crate) const TOKEN_NIBBLES: [u8; 16] = {
+    let mut map = [0u8; 16];
+    let mut b = 0;
+    while b < 0x80 {
+        if TOKEN_MAP[b] {
+            map[b & 0x0f] |= 1 << (b >> 4);
+        }
+        b += 1;
+    }
+    map
+};
+
 /// Determines if byte is a method token char.
 ///
 /// > ```notrust
@@ -59,7 +75,7 @@ pub(crate) fn skip_empty_lines(bytes: &mut Bytes<'_, '_>) -> Result<()> {
             Some(b'\r') => {
                 // peeked and found `\r`, so it's safe to bump 1 pos
                 bytes.advance(1);
-                expect!(bytes.next() == b'\n' => Err(Error::NewLine));
+                expect_lf!(bytes => Err(Error::NewLine));
             }
             Some(b'\n') => {
                 // peeked and found `\n`, so it's safe to bump 1 pos
