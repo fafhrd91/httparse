@@ -1,6 +1,6 @@
 use std::{hint::black_box, time::Duration};
 
-use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use ntex_httparse::{Header, HeaderParsed, Request, Response, SlicePos};
 
 const REQ_SHORT: &[u8] = b"\
@@ -20,37 +20,40 @@ Keep-Alive: 115\r\n\
 Connection: keep-alive\r\n\
 Cookie: wp_ozh_wsa_visits=2; wp_ozh_wsa_visit_lasttime=xxxxxxxxxx; __utma=xxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.xxxxxxxxxx.x; __utmz=xxxxxxxxx.xxxxxxxxxx.x.x.utmccn=(referral)|utmcsr=reader.livedoor.com|utmcct=/reader/|utmcmd=referral|padding=under256\r\n\r\n";
 
+/// Parse all headers of `input` starting at `consumed`, reusing one `Header`.
+#[inline(always)]
+fn parse_headers(header: &mut Header, input: &[u8], mut consumed: usize) -> usize {
+    loop {
+        match black_box(
+            header
+                .parse(black_box(&input[consumed..]))
+                .unwrap()
+                .unwrap(),
+        ) {
+            HeaderParsed::Header(l) => consumed += l,
+            HeaderParsed::Eof(l) => return consumed + l,
+        }
+    }
+}
+
+fn empty_header() -> Header {
+    Header {
+        name: SlicePos { start: 0, end: 0 },
+        value: SlicePos { start: 0, end: 0 },
+    }
+}
+
 fn req(c: &mut Criterion) {
     c.benchmark_group("req")
         .throughput(Throughput::Bytes(REQ.len() as u64))
         .bench_function("req", |b| {
-            b.iter_batched_ref(
-                || {
-                    (
-                        Request::default(),
-                        [Header {
-                            name: SlicePos { start: 0, end: 0 },
-                            value: SlicePos { start: 0, end: 0 },
-                        }; 16],
-                    )
-                },
-                |(req, headers)| {
-                    let mut consumed = black_box(req.parse(REQ).unwrap().unwrap());
-                    for item in headers {
-                        match black_box(item.parse(&REQ[consumed..]).unwrap().unwrap()) {
-                            HeaderParsed::Header(l) => {
-                                consumed += l;
-                            }
-                            HeaderParsed::Eof(l) => {
-                                consumed += l;
-                                break;
-                            }
-                        }
-                    }
-                    assert_eq!(consumed, REQ.len());
-                },
-                BatchSize::SmallInput,
-            )
+            let mut msg = Request::default();
+            let mut header = empty_header();
+            b.iter(|| {
+                let consumed = black_box(msg.parse(black_box(REQ)).unwrap().unwrap());
+                let consumed = parse_headers(&mut header, REQ, consumed);
+                assert_eq!(consumed, REQ.len());
+            })
         });
 }
 
@@ -58,31 +61,13 @@ fn req_short(c: &mut Criterion) {
     c.benchmark_group("req_short")
         .throughput(Throughput::Bytes(REQ_SHORT.len() as u64))
         .bench_function("req_short", |b| {
-            b.iter_batched_ref(
-                || {
-                    [Header {
-                        name: SlicePos { start: 0, end: 0 },
-                        value: SlicePos { start: 0, end: 0 },
-                    }; 16]
-                },
-                |headers| {
-                    let mut req = Request::default();
-                    let mut consumed = black_box(req.parse(REQ_SHORT).unwrap().unwrap());
-                    for item in headers {
-                        match black_box(item.parse(&REQ_SHORT[consumed..]).unwrap().unwrap()) {
-                            HeaderParsed::Header(l) => {
-                                consumed += l;
-                            }
-                            HeaderParsed::Eof(l) => {
-                                consumed += l;
-                                break;
-                            }
-                        }
-                    }
-                    assert_eq!(consumed, REQ_SHORT.len());
-                },
-                BatchSize::SmallInput,
-            )
+            let mut msg = Request::default();
+            let mut header = empty_header();
+            b.iter(|| {
+                let consumed = black_box(msg.parse(black_box(REQ_SHORT)).unwrap().unwrap());
+                let consumed = parse_headers(&mut header, REQ_SHORT, consumed);
+                assert_eq!(consumed, REQ_SHORT.len());
+            })
         });
 }
 
@@ -109,33 +94,13 @@ fn resp(c: &mut Criterion) {
     c.benchmark_group("resp")
         .throughput(Throughput::Bytes(RESP.len() as u64))
         .bench_function("resp", |b| {
-            b.iter_batched_ref(
-                || {
-                    (
-                        Response::default(),
-                        [Header {
-                            name: SlicePos { start: 0, end: 0 },
-                            value: SlicePos { start: 0, end: 0 },
-                        }; 16],
-                    )
-                },
-                |(resp, headers)| {
-                    let mut consumed = black_box(resp.parse(RESP).unwrap().unwrap());
-                    for item in headers {
-                        match black_box(item.parse(&RESP[consumed..]).unwrap().unwrap()) {
-                            HeaderParsed::Header(l) => {
-                                consumed += l;
-                            }
-                            HeaderParsed::Eof(l) => {
-                                consumed += l;
-                                break;
-                            }
-                        }
-                    }
-                    assert_eq!(consumed, RESP.len());
-                },
-                BatchSize::SmallInput,
-            )
+            let mut msg = Response::default();
+            let mut header = empty_header();
+            b.iter(|| {
+                let consumed = black_box(msg.parse(black_box(RESP)).unwrap().unwrap());
+                let consumed = parse_headers(&mut header, RESP, consumed);
+                assert_eq!(consumed, RESP.len());
+            })
         });
 }
 
@@ -143,33 +108,13 @@ fn resp_short(c: &mut Criterion) {
     c.benchmark_group("resp_short")
         .throughput(Throughput::Bytes(RESP_SHORT.len() as u64))
         .bench_function("resp_short", |b| {
-            b.iter_batched_ref(
-                || {
-                    (
-                        Response::default(),
-                        [Header {
-                            name: SlicePos { start: 0, end: 0 },
-                            value: SlicePos { start: 0, end: 0 },
-                        }; 16],
-                    )
-                },
-                |(resp, headers)| {
-                    let mut consumed = black_box(resp.parse(RESP_SHORT).unwrap().unwrap());
-                    for item in headers {
-                        match black_box(item.parse(&RESP_SHORT[consumed..]).unwrap().unwrap()) {
-                            HeaderParsed::Header(l) => {
-                                consumed += l;
-                            }
-                            HeaderParsed::Eof(l) => {
-                                consumed += l;
-                                break;
-                            }
-                        }
-                    }
-                    assert_eq!(consumed, RESP_SHORT.len());
-                },
-                BatchSize::SmallInput,
-            )
+            let mut msg = Response::default();
+            let mut header = empty_header();
+            b.iter(|| {
+                let consumed = black_box(msg.parse(black_box(RESP_SHORT)).unwrap().unwrap());
+                let consumed = parse_headers(&mut header, RESP_SHORT, consumed);
+                assert_eq!(consumed, RESP_SHORT.len());
+            })
         });
 }
 
@@ -202,30 +147,8 @@ fn header(c: &mut Criterion) {
         c.benchmark_group("header")
             .throughput(Throughput::Bytes(input.len() as u64))
             .bench_function(name, |b| {
-                b.iter_batched_ref(
-                    || {
-                        [Header {
-                            name: SlicePos { start: 0, end: 0 },
-                            value: SlicePos { start: 0, end: 0 },
-                        }; 128]
-                    },
-                    |headers| {
-                        let mut consumed = 0;
-                        for item in headers {
-                            match black_box(item.parse(&input[consumed..]).unwrap().unwrap()) {
-                                HeaderParsed::Header(l) => {
-                                    consumed += l;
-                                }
-                                HeaderParsed::Eof(l) => {
-                                    consumed += l;
-                                    break;
-                                }
-                            }
-                        }
-                        consumed
-                    },
-                    BatchSize::SmallInput,
-                )
+                let mut header = empty_header();
+                b.iter(|| parse_headers(&mut header, input, 0))
             });
     }
 
