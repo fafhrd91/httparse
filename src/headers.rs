@@ -44,7 +44,15 @@ impl Header {
         parse_header_iter_uninit(&mut bytes, self)
     }
 
+    /// Parse a header, resuming from `st` saved by a previous `Partial` result.
+    ///
+    /// `st` must come from a previous call with the same buffer (which may have
+    /// grown since), or be `State::default()`. An invalid state returns
+    /// `Error::HeaderName`.
     pub fn parse_with_state(&mut self, src: &[u8], st: &mut State) -> Result<HeaderParsed> {
+        if st.state > 3 || st.start > st.cursor || st.cursor > src.len() {
+            return Err(Error::HeaderName);
+        }
         parse_header_iter_uninit(&mut Bytes::new(src, st), self)
     }
 }
@@ -58,7 +66,7 @@ fn parse_header_iter_uninit(
         // a newline here means the head is over!
         let b = next!(bytes);
         if b == b'\r' {
-            expect!(bytes.next() == b'\n' => Err(Error::NewLine));
+            expect_lf!(bytes => Err(Error::NewLine));
             return Ok(Status::Complete(HeaderParsed::Eof(
                 bytes.cursor() - bytes.start(),
             )));
@@ -102,7 +110,7 @@ fn parse_header_iter_uninit(
             }
 
             if b == b'\r' {
-                expect!(bytes.next() == b'\n' => Err(Error::HeaderValue));
+                expect_lf!(bytes => Err(Error::HeaderValue));
             } else if b != b'\n' {
                 return Err(Error::HeaderValue);
             }
@@ -125,7 +133,7 @@ fn parse_header_iter_uninit(
             // check ctl
             let b = next!(bytes);
             if b == b'\r' {
-                expect!(bytes.next() == b'\n' => Err(Error::HeaderValue));
+                expect_lf!(bytes => Err(Error::HeaderValue));
             } else if b != b'\n' {
                 return Err(Error::HeaderValue);
             }

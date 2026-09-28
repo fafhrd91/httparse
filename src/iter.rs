@@ -69,6 +69,11 @@ impl<'a, 'b> Bytes<'a, 'b> {
     }
 
     #[inline]
+    pub(crate) fn rewind(&mut self, n: usize) {
+        self.st.cursor -= n;
+    }
+
+    #[inline]
     pub(crate) fn slice_position(&mut self, skip: usize) -> SlicePos {
         //unsafe {
         //debug_assert!(skip <= self.cursor.offset_from(self.start) as usize);

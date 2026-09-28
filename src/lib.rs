@@ -204,8 +204,15 @@ impl Request {
     }
 
     #[inline]
-    /// Parse request
+    /// Parse request, resuming from `st` saved by a previous `Partial` result.
+    ///
+    /// `st` must come from a previous call with the same buffer (which may have
+    /// grown since), or be `State::default()`. An invalid state returns
+    /// `Error::Token`.
     pub fn parse_with_state(&mut self, src: &[u8], st: &mut State) -> Result<usize> {
+        if st.state > 3 || st.start > st.cursor || st.cursor > src.len() {
+            return Err(Error::Token);
+        }
         if st.state == 0 {
             let mut tmp = State::default();
             let mut bytes = Bytes::new(src, &mut tmp);
@@ -220,6 +227,7 @@ impl Request {
             bytes.st.state = 2;
         }
         if st.state == 2 {
+            complete!(utils::skip_spaces(&mut Bytes::new(src, st)));
             let mut tmp = *st;
             let mut bytes = Bytes::new(src, &mut tmp);
             self.version = complete!(version::parse_version_inner(&mut bytes));
@@ -420,6 +428,7 @@ pub fn parse_uri(src: &[u8]) -> Result<&str> {
     let mut st = State::default();
     let mut bytes = Bytes::new(src, &mut st);
     if let Status::Complete(pos) = parse_uri_inner(&mut bytes)? {
+        complete!(utils::skip_spaces(&mut bytes));
         if let Ok(path) = simdutf8::basic::from_utf8(&src[pos.start..pos.end]) {
             Ok(Status::Complete(path))
         } else {
@@ -445,7 +454,7 @@ fn parse_uri_inner(bytes: &mut Bytes<'_, '_>) -> Result<SlicePos> {
 
         // SAFETY: all bytes up till `i` must have been `is_token` and therefore also utf-8.
         let end = bytes.cursor() - 1;
-        complete!(utils::skip_spaces(bytes));
+        bytes.commit();
         Ok(Status::Complete(SlicePos { start, end }))
     } else {
         Err(Error::Token)
@@ -512,6 +521,8 @@ pub fn parse_chunk_size(buf: &[u8]) -> result::Result<Status<(usize, u64)>, Inva
                 size *= RADIX;
                 size += ((b | 0x20) + 10 - b'a') as u64;
             }
+            // the chunk size must have at least one digit
+            b'\r' if count == 0 => return Err(InvalidChunkSize),
             b'\r' => match next!(bytes) {
                 b'\n' => break,
                 _ => return Err(InvalidChunkSize),
@@ -1410,6 +1421,124 @@ mod tests {
             parse_chunk_size(b"fffffffffffffffff\r\n"),
             Err(crate::InvalidChunkSize)
         );
+    }
+
+    #[test]
+    fn test_chunk_size_empty() {
+        for buf in [&b"\r\n"[..], b";a\r\n", b" \r\n", b"\t;a\r\n", b"\r"] {
+            assert_eq!(
+                parse_chunk_size(buf),
+                Err(crate::InvalidChunkSize),
+                "{buf:?}"
+            );
+        }
+        assert_eq!(parse_chunk_size(b"0\r\n"), Ok(Status::Complete((3, 0))));
+    }
+
+    // Feeds every prefix of `buf` to the resumable parser and checks that the
+    // result matches parsing the whole buffer at once.
+    fn header_split(buf: &[u8]) -> (Result<HeaderParsed>, Header) {
+        let mut one = Header::default();
+        let expected = one.parse(buf);
+        for split in 0..buf.len() {
+            let mut h = Header::default();
+            let mut st = State::default();
+            let first = h.parse_with_state(&buf[..split], &mut st);
+            if first.is_err() {
+                assert_eq!(first, expected, "split {split} of {buf:?}");
+                continue;
+            }
+            assert_eq!(first, Ok(Status::Partial), "split {split} of {buf:?}");
+            let res = h.parse_with_state(buf, &mut st);
+            assert_eq!(res, expected, "split {split} of {buf:?}");
+            if expected.is_ok() {
+                assert_eq!(h, one, "split {split} of {buf:?}");
+            }
+        }
+        (expected, one)
+    }
+
+    #[test]
+    fn test_header_split_bare_cr() {
+        assert_eq!(header_split(b"X: a\rb\r\n").0, Err(Error::HeaderValue));
+        assert_eq!(header_split(b"X:\rb\r\n").0, Err(Error::HeaderValue));
+        assert_eq!(header_split(b"\rX: b\r\n").0, Err(Error::NewLine));
+
+        let (res, h) = header_split(b"X: a b\r\n");
+        assert_eq!(res, Ok(Status::Complete(HeaderParsed::Header(8))));
+        assert_eq!(h.value, SlicePos { start: 3, end: 6 });
+        assert_eq!(
+            header_split(b"X:\r\n").0,
+            Ok(Status::Complete(HeaderParsed::Header(4)))
+        );
+        assert_eq!(
+            header_split(b"\r\n").0,
+            Ok(Status::Complete(HeaderParsed::Eof(2)))
+        );
+    }
+
+    #[test]
+    fn test_request_split() {
+        for buf in [
+            &b"GET /path HTTP/1.1\r\n"[..],
+            b"GET  /path   HTTP/1.1\r\n",
+            b"PUT /path HTTP/1.0\n",
+            b"GET /path HTTP/1.1\r\r\n",
+            b"GET /path HTTP/1.1\rX",
+        ] {
+            let mut one = Request::default();
+            let expected = one.parse(buf);
+            for split in 0..buf.len() {
+                let mut r = Request::default();
+                let mut st = State::default();
+                let first = r.parse_with_state(&buf[..split], &mut st);
+                if first.is_err() {
+                    assert_eq!(first, expected, "split {split} of {buf:?}");
+                    continue;
+                }
+                assert_eq!(first, Ok(Status::Partial), "split {split} of {buf:?}");
+                assert_eq!(
+                    r.parse_with_state(buf, &mut st),
+                    expected,
+                    "split {split} of {buf:?}"
+                );
+                if expected.is_ok() {
+                    assert_eq!(r, one, "split {split} of {buf:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_invalid_state() {
+        for st in [
+            State {
+                state: 3,
+                start: 0,
+                cursor: 100,
+            },
+            State {
+                state: 1,
+                start: 2,
+                cursor: 1,
+            },
+            State {
+                state: 4,
+                start: 0,
+                cursor: 0,
+            },
+        ] {
+            let mut s = st;
+            assert_eq!(
+                Header::default().parse_with_state(b"abc", &mut s),
+                Err(Error::HeaderName)
+            );
+            let mut s = st;
+            assert_eq!(
+                Request::default().parse_with_state(b"abc", &mut s),
+                Err(Error::Token)
+            );
+        }
     }
 
     #[test]

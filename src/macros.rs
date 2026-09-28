@@ -21,6 +21,21 @@ macro_rules! expect {
     };
 }
 
+// Expects `\n` after an already consumed `\r`. If the input ends after `\r`,
+// rewinds to it, so a resumed parse must see `\r\n` again.
+macro_rules! expect_lf {
+    ($bytes:ident => $ret:expr) => {
+        match $bytes.next() {
+            Some(b'\n') => {}
+            Some(_) => return $ret,
+            None => {
+                $bytes.rewind(1);
+                return Ok(Status::Partial);
+            }
+        }
+    };
+}
+
 macro_rules! complete {
     ($e:expr) => {
         match $e? {
@@ -49,7 +64,7 @@ macro_rules! newline {
     ($bytes:ident) => ({
         match next!($bytes) {
             b'\r' => {
-                expect!($bytes.next() == b'\n' => Err(Error::NewLine));
+                expect_lf!($bytes => Err(Error::NewLine));
                 $bytes.commit();
             },
             b'\n' => {
