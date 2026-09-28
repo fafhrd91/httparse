@@ -1,42 +1,49 @@
 use crate::{Error, Result, SlicePos, State, Status, iter::Bytes, simd, utils};
 
-/// Represents a parsed header.
+/// A parsed header.
 #[derive(Copy, Clone, Eq, PartialEq, Debug, Default)]
 pub struct Header {
-    /// The name portion of a header.
-    ///
-    /// A header name must be valid ASCII-US, so it's safe to store as a `&str`.
+    /// Header name, an ASCII token.
     pub name: SlicePos,
-    /// The value portion of a header.
+    /// Header value, without surrounding whitespace, `0..0` if empty.
     ///
-    /// While headers **should** be ASCII-US, the specification allows for
-    /// values that may not be, and so the value is stored as bytes.
+    /// May contain HTAB, SP, visible ASCII and bytes `0x80..=0xFF`, so it is
+    /// not guaranteed to be UTF-8.
     pub value: SlicePos,
 }
 
-/// Header parse result result.
+/// Header parse result.
+///
+/// Both variants hold the position in `src` right after the parsed input,
+/// i.e. the number of bytes consumed when parsing started at position 0.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum HeaderParsed {
+    /// A header was parsed, its positions are stored in `Header`.
     Header(usize),
+    /// The empty line ending the header section was parsed.
     Eof(usize),
 }
 
 impl Header {
-    /// Parse a buffer of bytes as header.
+    /// Parse a single header from a buffer of bytes.
     ///
-    /// The return value, if complete and successful, includes the index of the
-    /// buffer that parsing stopped at, and a sliced reference to the parsed
-    /// headers. The length of the slice will be equal to the number of properly
-    /// parsed headers.
+    /// If complete and successful, name and value positions are stored in
+    /// `self` and the returned `HeaderParsed` holds the position in the
+    /// buffer where parsing stopped.
+    ///
+    /// Obsolete line folding is not supported: a line starting with SP or
+    /// HTAB is rejected with `Error::HeaderName`.
     ///
     /// # Example
     ///
     /// ```
     /// use ntex_httparse::{Status, Header, HeaderParsed};
     ///
-    /// let buf = b"Host: foo.bar\nAccept: */*\n\nblah blah";
+    /// let buf = b"Host: foo.bar \nAccept: */*\n\nblah blah";
     /// let mut header = Header::default();
-    /// assert_eq!(header.parse(buf), Ok(Status::Complete(HeaderParsed::Header(14))));
+    /// assert_eq!(header.parse(buf), Ok(Status::Complete(HeaderParsed::Header(15))));
+    /// assert_eq!(&buf[header.name.start..header.name.end], b"Host");
+    /// assert_eq!(&buf[header.value.start..header.value.end], b"foo.bar");
     /// ```
     pub fn parse(&mut self, src: &[u8]) -> Result<HeaderParsed> {
         let mut st = State::default();
@@ -67,13 +74,11 @@ fn parse_header_iter_uninit(
         let b = next!(bytes);
         if b == b'\r' {
             expect_lf!(bytes => Err(Error::NewLine));
-            return Ok(Status::Complete(HeaderParsed::Eof(
-                bytes.cursor() - bytes.start(),
-            )));
+            bytes.commit();
+            return Ok(Status::Complete(HeaderParsed::Eof(bytes.cursor())));
         } else if b == b'\n' {
-            return Ok(Status::Complete(HeaderParsed::Eof(
-                bytes.cursor() - bytes.start(),
-            )));
+            bytes.commit();
+            return Ok(Status::Complete(HeaderParsed::Eof(bytes.cursor())));
         } else if !utils::is_header_name_token(b) {
             return Err(Error::HeaderName);
         }
@@ -85,7 +90,6 @@ fn parse_header_iter_uninit(
     if bytes.st.state == 1 {
         simd::match_header_name_vectored(bytes);
         if next!(bytes) == b':' {
-            // SAFETY: previously bumped by 1 with next! -> always safe.
             bytes.st.state = 2;
             header.name.end = bytes.cursor() - 1;
         } else {

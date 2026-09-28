@@ -31,13 +31,7 @@ impl<'a, 'b> Bytes<'a, 'b> {
         self.slice.get(self.st.cursor).copied()
     }
 
-    /// Peek at byte `n` ahead of cursor
-    ///
-    /// # Safety
-    ///
-    /// Caller must ensure that `n <= self.len()`, otherwise `self.cursor.add(n)` is UB.
-    /// That means there are at least `n-1` bytes between `self.cursor` and `self.end`
-    /// and `self.cursor.add(n)` is either `self.end` or points to a valid byte.
+    /// Peek at byte `n` ahead of cursor, `None` if it is past the end.
     #[inline]
     pub(crate) fn peek_ahead(&self, n: usize) -> Option<u8> {
         self.slice.get(self.st.cursor + n).copied()
@@ -59,9 +53,7 @@ impl<'a, 'b> Bytes<'a, 'b> {
 
     /// Advance cursor by `n`
     ///
-    /// # Safety
-    ///
-    /// Caller must ensure that Bytes hasn't been advanced/bumped by more than [`Bytes::len()`].
+    /// The cursor must stay within the slice, otherwise later reads panic.
     #[inline]
     pub(crate) fn advance(&mut self, n: usize) {
         self.st.cursor += n;
@@ -75,9 +67,6 @@ impl<'a, 'b> Bytes<'a, 'b> {
 
     #[inline]
     pub(crate) fn slice_position(&mut self, skip: usize) -> SlicePos {
-        //unsafe {
-        //debug_assert!(skip <= self.cursor.offset_from(self.start) as usize);
-        //}
         let start = self.st.start;
         let end = self.st.cursor - skip;
         self.commit();

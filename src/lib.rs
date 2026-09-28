@@ -8,14 +8,29 @@
 #![cfg_attr(not(any(test, feature = "std")), no_std)]
 #![cfg_attr(test, deny(warnings))]
 
-//! # httparse
+//! # ntex-httparse
 //!
-//! A push library for parsing HTTP/1.x requests and responses.
+//! A push library for parsing HTTP/1.x requests and responses, used by
+//! [ntex](https://crates.io/crates/ntex). It is a fork of
+//! [httparse](https://crates.io/crates/httparse) with a lower level API.
 //!
-//! The focus is on speed and safety. Unsafe code is used to keep parsing fast,
-//! but unsafety is contained in a submodule, with invariants enforced. The
-//! parsing internals use an `Iterator` instead of direct indexing, while
-//! skipping bounds checks.
+//! Parsers do not borrow the input. Parsed parts are returned as
+//! [`SlicePos`] ranges into the buffer passed to `parse`. The start line and
+//! the headers are parsed separately:
+//!
+//! * [`Request::parse`] or [`Response::parse`] parses the start line and
+//!   returns the position right after it.
+//! * [`Header::parse`] parses one header at a time, until it returns
+//!   [`HeaderParsed::Eof`] for the empty line ending the header section.
+//! * [`parse_chunk_size`] parses the size line of a chunked body.
+//!
+//! Incomplete input is not an error, the parsers return
+//! [`Status::Partial`]. The `parse_with_state` variants save their progress
+//! in a [`State`], so the next call with more data continues where the
+//! previous one stopped instead of starting over.
+//!
+//! The focus is on speed and safety. Parsing is bounds-checked, unsafe code
+//! is limited to the SIMD matchers in a submodule.
 //!
 //! SIMD optimizations are enabled automatically when available.
 //! If building an executable to be run on multiple platforms, and thus
@@ -26,6 +41,40 @@
 //! If compiling for a specific target, remembering to include
 //! `-C target_cpu=native` allows the detection to become compile time checks,
 //! making it *even* faster.
+//!
+//! # Example
+//!
+//! ```
+//! use ntex_httparse::{Header, HeaderParsed, Request, Status};
+//!
+//! let buf = b"GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\nbody";
+//!
+//! let mut req = Request::default();
+//! let Status::Complete(mut pos) = req.parse(buf).unwrap() else {
+//!     unreachable!("the request line is complete")
+//! };
+//! assert_eq!(&buf[req.path.start..req.path.end], b"/index.html");
+//! assert_eq!(req.version, 1);
+//!
+//! let mut header = Header::default();
+//! loop {
+//!     let src = &buf[pos..];
+//!     match header.parse(src).unwrap() {
+//!         Status::Complete(HeaderParsed::Header(len)) => {
+//!             assert_eq!(&src[header.name.start..header.name.end], b"Host");
+//!             assert_eq!(&src[header.value.start..header.value.end], b"example.com");
+//!             pos += len;
+//!         }
+//!         Status::Complete(HeaderParsed::Eof(len)) => {
+//!             pos += len;
+//!             break;
+//!         }
+//!         // wait for more data, then parse again
+//!         Status::Partial => unreachable!(),
+//!     }
+//! }
+//! assert_eq!(&buf[pos..], b"body");
+//! ```
 
 use core::{fmt, result, str};
 
@@ -55,7 +104,7 @@ pub enum Error {
     Status,
     /// Invalid byte where token is required.
     Token,
-    /// Parsed more headers than provided buffer can contain.
+    /// Unused, kept for compatibility. Headers are parsed one at a time.
     TooManyHeaders,
     /// Invalid byte in HTTP version.
     Version,
@@ -149,19 +198,30 @@ impl<T> Status<T> {
     }
 }
 
+/// Progress of a resumable parse, used by the `parse_with_state` methods.
+///
+/// Start with `State::default()` and pass the same `State` again, with the
+/// same (possibly grown) buffer, after a [`Status::Partial`] result. Reset it
+/// to default before parsing the next item from a different buffer position.
+/// The fields are internal bookkeeping and should not be changed by callers.
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
 pub struct State {
-    // state
+    /// Parser specific step.
     pub state: u8,
-    // bytes
+    /// Start of the part being parsed.
     pub start: usize,
+    /// Position of the next byte to parse.
     pub cursor: usize,
 }
 
 #[derive(Copy, Clone, Default, Debug, PartialEq, Eq)]
-/// A slice position.
+/// A range of the buffer passed to `parse`, i.e. `&src[pos.start..pos.end]`.
+///
+/// An empty part, like an empty header value or reason phrase, is `0..0`.
 pub struct SlicePos {
+    /// Start of the range, inclusive.
     pub start: usize,
+    /// End of the range, exclusive.
     pub end: usize,
 }
 
@@ -172,39 +232,53 @@ impl SlicePos {
     }
 }
 
-/// A parsed Request.
+/// A parsed request line.
+///
+/// Only the request line is parsed, use [`Header`] for the headers that
+/// follow it.
 ///
 /// # Example
 ///
-/// ```no_run
-/// let buf = b"GET /404 HTTP/1.1\r\nHost:";
-/// let mut req = ntex_httparse::Request::default();
-/// if let Ok(ntex_httparse::Status::Complete(consumed)) = req.parse(buf) {
-///     // check router for path.
-///     // /404 doesn't exist? we could stop parsing
-///     let _ = req.path;
-/// }
+/// ```
+/// use ntex_httparse::{Request, State, Status};
+///
+/// let mut req = Request::default();
+/// let mut st = State::default();
+///
+/// // incomplete data, the parser remembers its progress in `st`
+/// let buf = b"GET /index.html HT";
+/// assert_eq!(req.parse_with_state(buf, &mut st), Ok(Status::Partial));
+///
+/// let buf = b"GET /index.html HTTP/1.1\r\nHost: example.com\r\n\r\n";
+/// assert_eq!(req.parse_with_state(buf, &mut st), Ok(Status::Complete(26)));
+/// assert_eq!(&buf[req.method.start..req.method.end], b"GET");
+/// assert_eq!(&buf[req.path.start..req.path.end], b"/index.html");
 /// ```
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 pub struct Request {
-    /// Parsed request's method.
+    /// Request method, an ASCII token.
     pub method: SlicePos,
-    /// Parsed request's path.
+    /// Request target. May contain bytes `0x80..=0xFF`, so it is not
+    /// guaranteed to be UTF-8.
     pub path: SlicePos,
-    /// Parsed request's http version.
+    /// HTTP version, `0` for HTTP/1.0 and `1` for HTTP/1.1.
     pub version: u8,
 }
 
 impl Request {
     #[inline]
-    /// Parse request
+    /// Parse a request line.
+    ///
+    /// Returns the position right after the line ending, where the headers
+    /// start. Empty lines before the request line are skipped.
     pub fn parse(&mut self, src: &[u8]) -> Result<usize> {
         let mut st = State::default();
         self.parse_with_state(src, &mut st)
     }
 
     #[inline]
-    /// Parse request, resuming from `st` saved by a previous `Partial` result.
+    /// Parse a request line, resuming from `st` saved by a previous `Partial`
+    /// result.
     ///
     /// `st` must come from a previous call with the same buffer (which may have
     /// grown since), or be `State::default()`. An invalid state returns
@@ -242,20 +316,40 @@ impl Request {
     }
 }
 
-/// A parsed Response.
+/// A parsed status line.
+///
+/// Only the status line is parsed, use [`Header`] for the headers that
+/// follow it.
+///
+/// # Example
+///
+/// ```
+/// use ntex_httparse::{Response, Status};
+///
+/// let buf = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
+/// let mut res = Response::default();
+/// assert_eq!(res.parse(buf), Ok(Status::Complete(24)));
+/// assert_eq!(res.code, 404);
+/// assert_eq!(&buf[res.reason.start..res.reason.end], b"Not Found");
+/// ```
 #[derive(Copy, Clone, Default, PartialEq, Eq, Debug)]
 pub struct Response {
-    /// Parsed response's http version.
+    /// HTTP version, `0` for HTTP/1.0 and `1` for HTTP/1.1.
     pub version: u8,
-    /// Parsed response's code.
+    /// Status code, three digits.
     pub code: u16,
-    /// Parsed response's reason (start position, length).
+    /// Reason phrase, empty if missing. A non-empty reason is ASCII, a reason
+    /// containing obs-text (bytes `0x80..=0xFF`) is returned as empty.
     pub reason: SlicePos,
 }
 
 impl Response {
     #[inline]
-    /// Parse response code and reason
+    /// Parse a status line.
+    ///
+    /// Returns the position right after the line ending, where the headers
+    /// start. Empty lines before the status line are skipped. The reason
+    /// phrase is optional.
     pub fn parse(&mut self, src: &[u8]) -> Result<usize> {
         let mut st = State::default();
         let mut bytes = Bytes::new(src, &mut st);
@@ -303,7 +397,9 @@ impl Response {
 }
 
 #[inline]
-// WARNING: Exported for internal benchmarks, not fit for public consumption
+#[doc(hidden)]
+/// Parse a request method. Exported for internal benchmarks, not part of the
+/// public API.
 pub fn parse_method(src: &[u8]) -> Result<&str> {
     let s = complete!(parse_method_inner(&mut Bytes::new(
         src,
@@ -315,7 +411,6 @@ pub fn parse_method(src: &[u8]) -> Result<&str> {
 }
 
 #[inline]
-// WARNING: Exported for internal benchmarks, not fit for public consumption
 fn parse_method_inner(bytes: &mut Bytes<'_, '_>) -> Result<SlicePos> {
     const GET: [u8; 4] = *b"GET ";
     const POST: [u8; 4] = *b"POST";
@@ -352,7 +447,7 @@ fn parse_method_inner(bytes: &mut Bytes<'_, '_>) -> Result<SlicePos> {
                 let b = next!(bytes);
                 if b == b' ' {
                     return Ok(Status::Complete(
-                        // SAFETY: all bytes up till `i` must have been `is_method_token` and therefore also utf-8.
+                        // all bytes are `is_method_token`, so the method is ASCII
                         bytes.slice_position(1),
                     ));
                 } else if !utils::is_method_token(b) {
@@ -384,11 +479,8 @@ fn parse_reason(bytes: &mut Bytes<'_, '_>) -> Result<SlicePos> {
         if b == b'\r' {
             expect!(bytes.next() == b'\n' => Err(Error::Status));
             return Ok(Status::Complete(
-                // SAFETY: (1) calling bytes.slice_skip(2) is safe, because at least two next! calls
-                // advance the bytes iterator.
-                // (2) calling from_utf8_unchecked is safe, because the bytes returned by slice_skip
-                // were validated to be allowed US-ASCII chars by the other arms of the if/else or
-                // otherwise `seen_obs_text` is true and an empty string is returned instead.
+                // A non-empty reason contains only HTAB / SP / VCHAR, so it is
+                // ASCII. With obs-text an empty reason is returned instead.
                 if seen_obs_text {
                     // obs-text characters were found, so return the fallback empty string
                     bytes.commit();
@@ -400,9 +492,7 @@ fn parse_reason(bytes: &mut Bytes<'_, '_>) -> Result<SlicePos> {
             ));
         } else if b == b'\n' {
             return Ok(Status::Complete(
-                // SAFETY: (1) calling bytes.slice_skip(1) is safe, because at least one next! call
-                // advance the bytes iterator.
-                // (2) see (2) of safety comment above.
+                // see the comment above
                 if seen_obs_text {
                     // obs-text characters were found, so return the fallback empty string
                     bytes.commit();
@@ -421,8 +511,12 @@ fn parse_reason(bytes: &mut Bytes<'_, '_>) -> Result<SlicePos> {
 }
 
 #[inline]
-#[allow(missing_docs)]
-/// Parse request path
+#[doc(hidden)]
+/// Parse a request target followed by a space. Exported for internal
+/// benchmarks, not part of the public API.
+///
+/// Unlike [`Request::parse`], returns `Error::Token` if the target is not
+/// valid UTF-8.
 pub fn parse_uri(src: &[u8]) -> Result<&str> {
     let mut st = State::default();
     let mut bytes = Bytes::new(src, &mut st);
@@ -439,7 +533,6 @@ pub fn parse_uri(src: &[u8]) -> Result<&str> {
 }
 
 #[inline]
-// WARNING: Exported for internal benchmarks, not fit for public consumption
 fn parse_uri_inner(bytes: &mut Bytes<'_, '_>) -> Result<SlicePos> {
     let start = bytes.start();
     simd::match_uri_vectored(bytes);
@@ -451,7 +544,7 @@ fn parse_uri_inner(bytes: &mut Bytes<'_, '_>) -> Result<SlicePos> {
             return Err(Error::Token);
         }
 
-        // SAFETY: all bytes up till `i` must have been `is_token` and therefore also utf-8.
+        // URI bytes may include 0x80..=0xFF, so they are not guaranteed to be UTF-8
         let end = bytes.cursor() - 1;
         bytes.commit();
         Ok(Status::Complete(SlicePos { start, end }))
@@ -471,10 +564,15 @@ fn parse_code(bytes: &mut Bytes<'_, '_>) -> Result<u16> {
     ))
 }
 
-/// Parse a buffer of bytes as a chunk size.
+/// Parse a buffer of bytes as a chunk size line.
 ///
-/// The return value, if complete and successful, includes the index of the
-/// buffer that parsing stopped at, and the size of the following chunk.
+/// The return value, if complete and successful, includes the position right
+/// after the line, where the chunk data starts, and the size of the chunk.
+/// A size of `0` is the last chunk.
+///
+/// The size is 1 to 16 hex digits and the line must end with CRLF. Chunk
+/// extensions are skipped, control characters other than HTAB are rejected
+/// in them.
 ///
 /// # Example
 ///
@@ -1064,9 +1162,12 @@ mod tests {
         assert_eq!(&B5[header.name.start..header.name.end], b"Cookie");
         assert_eq!(&B5[header.value.start..header.value.end], b"");
 
-        assert!(header.parse_with_state(B5, &mut st).unwrap().is_complete());
+        assert_eq!(
+            header.parse_with_state(B5, &mut st),
+            Ok(Status::Complete(HeaderParsed::Eof(32)))
+        );
         assert_eq!(st.state, 0);
-        assert_eq!(st.start, 30);
+        assert_eq!(st.start, 32);
         assert_eq!(st.cursor, 32);
     }
 
@@ -1518,6 +1619,26 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_header_state_reuse() {
+        let buf = b"A: 1\r\nB: 2\r\n\r\nbody";
+        let mut h = Header::default();
+        let mut st = State::default();
+        assert_eq!(
+            h.parse_with_state(buf, &mut st),
+            Ok(Status::Complete(HeaderParsed::Header(6)))
+        );
+        assert_eq!(
+            h.parse_with_state(buf, &mut st),
+            Ok(Status::Complete(HeaderParsed::Header(12)))
+        );
+        assert_eq!((h.name.start, h.value.end), (6, 10));
+        assert_eq!(
+            h.parse_with_state(buf, &mut st),
+            Ok(Status::Complete(HeaderParsed::Eof(14)))
+        );
     }
 
     #[test]

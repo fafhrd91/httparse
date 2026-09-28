@@ -22,3 +22,10 @@
 
 * `Response::parse` no longer skips empty lines between the version and the
   status code (e.g. `HTTP/1.1\r\n 200 OK`)
+
+* `HeaderParsed::Eof` holds the position in the buffer, like
+  `HeaderParsed::Header`, instead of the length of the final empty line. This
+  only differs when `State` is not reset between headers
+
+* Rewrite API docs and README for the fork's API; hide the benchmark-only
+  `parse_method` and `parse_uri` from docs
