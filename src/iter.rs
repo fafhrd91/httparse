@@ -77,6 +77,12 @@ impl<'a, 'b> Bytes<'a, 'b> {
     pub(crate) fn commit(&mut self) {
         self.st.start = self.st.cursor;
     }
+
+    /// Bytes from `pos` up to the cursor.
+    #[inline]
+    pub(crate) fn since(&self, pos: usize) -> &[u8] {
+        &self.slice[pos..self.st.cursor]
+    }
 }
 
 impl AsRef<[u8]> for Bytes<'_, '_> {

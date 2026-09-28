@@ -534,6 +534,23 @@ fn parse_method_inner(bytes: &mut Bytes<'_, '_>) -> Result<SlicePos> {
 /// previous call, `seen_obs_text` carries over whether they had obs-text.
 #[inline]
 fn parse_reason(bytes: &mut Bytes<'_, '_>, seen_obs_text: &mut bool) -> Result<SlicePos> {
+    // Short reasons are scanned byte by byte, the SIMD call only pays off
+    // for longer ones. Reason bytes are the same set as header value bytes.
+    const SCALAR_PREFIX: usize = 8;
+    let mut n = 0;
+    while let Some(b) = bytes.peek() {
+        if n == SCALAR_PREFIX {
+            match_reason_vectored(bytes, seen_obs_text);
+            break;
+        }
+        if b < 0x80 && utils::is_header_value_token(b) {
+            bytes.advance(1);
+            n += 1;
+        } else {
+            break;
+        }
+    }
+
     loop {
         let b = next!(bytes);
         let skip = if b == b'\r' {
@@ -558,6 +575,15 @@ fn parse_reason(bytes: &mut Bytes<'_, '_>, seen_obs_text: &mut bool) -> Result<S
         } else {
             bytes.slice_position(skip)
         }));
+    }
+}
+
+#[inline(never)]
+fn match_reason_vectored(bytes: &mut Bytes<'_, '_>, seen_obs_text: &mut bool) {
+    let from = bytes.cursor();
+    simd::match_header_value_vectored(bytes);
+    if !*seen_obs_text && !bytes.since(from).is_ascii() {
+        *seen_obs_text = true;
     }
 }
 
@@ -1427,6 +1453,53 @@ mod tests {
         test_response_reason_with_nul_byte,
         b"HTTP/1.1 200 \x00\r\n\r\n",
         Err(crate::Error::Status)
+    }
+
+    #[test]
+    fn test_response_reason_bytes_at_every_position() {
+        const PREFIX: &[u8] = b"HTTP/1.1 200 ";
+        for len in 1..80 {
+            for pos in 0..len {
+                for b in [b'\t', b' ', b'~', 0x00, 0x0b, 0x7f, 0x80, 0xff] {
+                    let mut reason = vec![b'a'; len];
+                    reason[pos] = b;
+                    let buf = [PREFIX, &reason, b"\r\n"].concat();
+                    let valid = b == b'\t' || b == b' ' || b == b'~' || b >= 0x80;
+
+                    // parse at once and resumed at every split point
+                    for split in PREFIX.len()..=buf.len() {
+                        let mut resp = Response::default();
+                        let mut st = State::default();
+                        let first = resp.parse_with_state(&buf[..split], &mut st);
+                        let res = if split == buf.len() {
+                            first
+                        } else if first.is_err() {
+                            assert!(!valid, "len {len} pos {pos} byte {b:#x} split {split}");
+                            continue;
+                        } else {
+                            assert_eq!(first, Ok(Status::Partial));
+                            resp.parse_with_state(&buf, &mut st)
+                        };
+                        let ctx = format!("len {len} pos {pos} byte {b:#x} split {split}");
+                        if !valid {
+                            assert_eq!(res, Err(crate::Error::Status), "{ctx}");
+                        } else if b >= 0x80 {
+                            assert_eq!(res, Ok(Status::Complete(buf.len())), "{ctx}");
+                            assert_eq!(resp.reason, SlicePos::default(), "{ctx}");
+                        } else {
+                            assert_eq!(res, Ok(Status::Complete(buf.len())), "{ctx}");
+                            // leading spaces are skipped, trailing whitespace is kept
+                            let start = usize::from(pos == 0 && b == b' ');
+                            assert_eq!(
+                                &buf[resp.reason.start..resp.reason.end],
+                                &reason[start..],
+                                "{ctx}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 
     res_par! {

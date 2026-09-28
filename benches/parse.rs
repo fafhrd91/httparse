@@ -183,6 +183,28 @@ fn header(c: &mut Criterion) {
     }
 }
 
+fn reason(c: &mut Criterion) {
+    fn _reason(c: &mut Criterion, name: &str, input: &'static [u8]) {
+        c.benchmark_group("reason")
+            .throughput(Throughput::Bytes(input.len() as u64))
+            .bench_function(name, |b| {
+                let mut resp = Response::default();
+                b.iter(|| black_box(resp.parse(black_box(input)).unwrap().unwrap()))
+            });
+    }
+
+    const REASON: &[u8] = b"Non-Authoritative Information from the upstream proxy server ";
+    let reason_4k = REASON.repeat(4096 / REASON.len() + 1);
+
+    _reason(c, "ok", b"HTTP/1.1 200 OK\r\n");
+    // 1b to 1024b
+    for p in 0..=10 {
+        let n = 1 << p;
+        let payload = [b"HTTP/1.1 200 ", &reason_4k[..n], b"\r\n"].concat().leak();
+        _reason(c, &format!("reason_{:04}b", n), payload);
+    }
+}
+
 fn version(c: &mut Criterion) {
     fn _version(c: &mut Criterion, name: &str, input: &'static [u8]) {
         c.benchmark_group("version")
@@ -258,6 +280,6 @@ const SAMPLES: usize = 200;
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(SAMPLES).warm_up_time(WARMUP).measurement_time(MTIME);
-    targets = req, req_short, resp, resp_short, uri, header, version, method, many_requests
+    targets = req, req_short, resp, resp_short, uri, header, reason, version, method, many_requests
 }
 criterion_main!(benches);
