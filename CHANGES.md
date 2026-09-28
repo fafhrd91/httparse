@@ -19,3 +19,6 @@
 
 * `Request::parse_with_state` and `Header::parse_with_state` return an error
   for an invalid `State` instead of panicking or returning stale positions
+
+* `Response::parse` no longer skips empty lines between the version and the
+  status code (e.g. `HTTP/1.1\r\n 200 OK`)

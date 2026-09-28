@@ -264,7 +264,6 @@ impl Response {
 
         // version
         self.version = complete!(version::parse_version_inner(&mut bytes));
-        complete!(utils::skip_empty_lines(&mut bytes));
         expect!(bytes.next() == b' ' => Err(Error::Version));
         bytes.commit();
         complete!(utils::skip_spaces(&mut bytes));
@@ -1162,6 +1161,18 @@ mod tests {
                 );
             }
         };
+    }
+
+    res_err! {
+        test_response_newline_after_version,
+        b"HTTP/1.1\r\n\r\n 200 OK\r\n\r\n",
+        Err(Error::Version)
+    }
+
+    res_err! {
+        test_response_bare_newline_after_version,
+        b"HTTP/1.1\n 200 OK\r\n\r\n",
+        Err(Error::Version)
     }
 
     res! {
