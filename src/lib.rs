@@ -1731,6 +1731,32 @@ mod tests {
     }
 
     #[test]
+    fn test_header_name_chars_at_every_position() {
+        // covers the scalar prefix, the SIMD blocks and the tail
+        for len in [1, 15, 16, 17, 31, 32, 33, 47, 48, 70] {
+            for pos in 1..len {
+                for b in 0..=255_u8 {
+                    let mut buf = vec![b'x'; len];
+                    buf[pos] = b;
+                    buf.extend_from_slice(b": v\r\n");
+                    let res = Header::default().parse(&buf);
+                    if utils::TOKEN_MAP[b as usize] {
+                        assert_eq!(
+                            res,
+                            Ok(Status::Complete(HeaderParsed::Header(len + 5))),
+                            "len {len} pos {pos} byte {b}"
+                        );
+                    } else if b == b':' {
+                        assert!(res.is_ok(), "len {len} pos {pos}");
+                    } else {
+                        assert_eq!(res, Err(Error::HeaderName), "len {len} pos {pos} byte {b}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn test_header_state_reuse() {
         let buf = b"A: 1\r\nB: 2\r\n\r\nbody";
         let mut h = Header::default();

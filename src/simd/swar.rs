@@ -82,6 +82,26 @@ fn match_tail(f: impl Fn(u8) -> bool, bytes: &[u8]) -> usize {
     bytes.len()
 }
 
+/// Matches up to `N` header name chars. Returns `true` if `N` chars were
+/// consumed and the name may continue.
+///
+/// Header names are short, for them a table lookup per byte is faster than
+/// setting up a SIMD match.
+#[allow(dead_code)]
+#[inline(always)]
+pub fn match_header_name_prefix<const N: usize>(bytes: &mut Bytes) -> bool {
+    let buf = bytes.as_ref();
+    let len = buf.len().min(N);
+    for (i, &b) in buf[..len].iter().enumerate() {
+        if !utils::is_header_name_token(b) {
+            bytes.advance(i);
+            return false;
+        }
+    }
+    bytes.advance(len);
+    len == N
+}
+
 // Naive fallback block matcher
 #[inline(always)]
 fn match_block(f: impl Fn(u8) -> bool, block: ByteBlock) -> usize {

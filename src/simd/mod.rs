@@ -69,7 +69,9 @@ pub use self::runtime::*;
 mod sse42_compile_time {
     #[inline(always)]
     pub fn match_header_name_vectored(b: &mut crate::iter::Bytes<'_, '_>) {
-        super::swar::match_header_name_vectored(b);
+        if super::swar::match_header_name_prefix::<16>(b) {
+            unsafe { super::sse42::match_header_name_vectored(b) }
+        }
     }
 
     #[inline(always)]
@@ -99,7 +101,9 @@ pub use self::sse42_compile_time::*;
 mod avx2_compile_time {
     #[inline(always)]
     pub fn match_header_name_vectored(b: &mut crate::iter::Bytes<'_, '_>) {
-        super::swar::match_header_name_vectored(b);
+        if super::swar::match_header_name_prefix::<16>(b) {
+            unsafe { super::avx2::match_header_name_vectored(b) }
+        }
     }
 
     #[inline(always)]

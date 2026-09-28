@@ -2,6 +2,8 @@
 
 ## [2.2.0] - 2026-09-28
 
+* Header names longer than 16 bytes are matched with SSE4.2 or AVX2 on x86
+
 * `Request::parse_with_state` is fully resumable: every part of the request
   line, including the method and leading empty lines, continues where the
   previous `Partial` result stopped instead of being rescanned
