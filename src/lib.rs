@@ -540,10 +540,15 @@ fn parse_reason(bytes: &mut Bytes<'_, '_>, seen_obs_text: &mut bool) -> Result<S
     let mut n = 0;
     while let Some(b) = bytes.peek() {
         if n == SCALAR_PREFIX {
-            match_reason_vectored(bytes, seen_obs_text);
+            if !matches!(b, b'\r' | b'\n') {
+                match_reason_vectored(bytes, seen_obs_text);
+            }
             break;
         }
-        if b < 0x80 && utils::is_header_value_token(b) {
+        if utils::is_header_value_token(b) {
+            if b >= 0x80 {
+                *seen_obs_text = true;
+            }
             bytes.advance(1);
             n += 1;
         } else {
@@ -584,8 +589,14 @@ fn parse_reason(bytes: &mut Bytes<'_, '_>, seen_obs_text: &mut bool) -> Result<S
 fn match_reason_vectored(bytes: &mut Bytes<'_, '_>, seen_obs_text: &mut bool) {
     let from = bytes.cursor();
     simd::match_header_value_vectored(bytes);
-    if !*seen_obs_text && !bytes.since(from).is_ascii() {
-        *seen_obs_text = true;
+    if !*seen_obs_text {
+        let scanned = bytes.since(from);
+        // Keep the tail separate so is_ascii uses word checks rather than
+        // a byte-at-a-time remainder after its vector loop.
+        let (blocks, tail) = scanned.split_at(scanned.len() & !63);
+        if !blocks.is_ascii() || !tail.is_ascii() {
+            *seen_obs_text = true;
+        }
     }
 }
 
@@ -1511,6 +1522,51 @@ mod tests {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn test_response_reason_ascii_block_boundaries() {
+        const PREFIX: &[u8] = b"HTTP/1.1 200 ";
+        for len in [
+            63, 64, 65, 71, 72, 73, 127, 128, 129, 135, 136, 137, 199, 200, 255, 256,
+        ] {
+            for pos in [
+                None,
+                Some(0),
+                Some(7),
+                Some(8),
+                Some(63),
+                Some(64),
+                Some(len - 1),
+            ] {
+                if pos.is_some_and(|pos| pos >= len) {
+                    continue;
+                }
+                let mut reason = vec![b'a'; len];
+                if let Some(pos) = pos {
+                    reason[pos] = 0xff;
+                }
+                let mut buf = [PREFIX, &reason, b"\r\n"].concat();
+                let consumed = buf.len();
+                let expected = if pos.is_some() {
+                    SlicePos::default()
+                } else {
+                    SlicePos {
+                        start: PREFIX.len(),
+                        end: PREFIX.len() + len,
+                    }
+                };
+                let mut resp = Response::default();
+                assert_eq!(resp.parse(&buf), Ok(Status::Complete(consumed)));
+                assert_eq!(resp.reason, expected, "len {len} pos {pos:?}");
+                check_split(&buf, Response::parse_with_state, Response::parse);
+
+                buf.extend_from_slice(b"X-Next: \xff\r\n\r\n");
+                let mut resp = Response::default();
+                assert_eq!(resp.parse(&buf), Ok(Status::Complete(consumed)));
+                assert_eq!(resp.reason, expected, "len {len} pos {pos:?}");
             }
         }
     }

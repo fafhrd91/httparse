@@ -99,7 +99,7 @@ pub fn match_header_name_prefix<const N: usize>(bytes: &mut Bytes) -> bool {
         }
     }
     bytes.advance(len);
-    len == N
+    len == N && bytes.peek().is_some_and(|b| b != b':')
 }
 
 // Naive fallback block matcher

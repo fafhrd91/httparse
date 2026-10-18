@@ -25,11 +25,12 @@ pub unsafe fn match_header_name_vectored(bytes: &mut Bytes) {
         let bit = _mm256_shuffle_epi8(bits, hi);
         let ok = _mm256_cmpeq_epi8(_mm256_and_si256(rows, bit), bit);
         let advance = (_mm256_movemask_epi8(ok) as u32).trailing_ones() as usize;
-        bytes.advance(advance);
 
         if advance != 32 {
+            bytes.advance(advance);
             return;
         }
+        bytes.advance(32);
     }
 
     // header names are short, check 16 bytes before falling back to SWAR
@@ -58,11 +59,11 @@ pub unsafe fn match_uri_vectored(bytes: &mut Bytes) {
     while bytes.as_ref().len() >= 32 {
         let advance = match_url_char_32_avx(bytes.as_ref());
 
-        bytes.advance(advance);
-
         if advance != 32 {
+            bytes.advance(advance);
             return;
         }
+        bytes.advance(32);
     }
     // NOTE: use SWAR for <32B, more efficient than falling back to SSE4.2
     super::swar::match_uri_vectored(bytes);
@@ -133,11 +134,12 @@ unsafe fn match_url_char_32_avx(buf: &[u8]) -> usize {
 pub unsafe fn match_header_value_vectored(bytes: &mut Bytes) {
     while bytes.as_ref().len() >= 32 {
         let advance = match_header_value_char_32_avx(bytes.as_ref());
-        bytes.advance(advance);
 
         if advance != 32 {
+            bytes.advance(advance);
             return;
         }
+        bytes.advance(32);
     }
     // NOTE: use SWAR for <32B, more efficient than falling back to SSE4.2
     super::swar::match_header_value_vectored(bytes);

@@ -60,9 +60,9 @@ pub fn match_header_value_vectored(bytes: &mut Bytes) {
     // SAFETY: calls are guarded by a feature check
     unsafe {
         match get_runtime_feature() {
-            AVX2 => avx2::match_header_value_vectored(bytes),
+            AVX2 if bytes.peek_ahead(31).is_some() => avx2::match_header_value_vectored(bytes),
             SSE42 => sse42::match_header_value_vectored(bytes),
-            _ /* NOP */ => super::swar::match_header_value_vectored(bytes),
+            _ => super::swar::match_header_value_vectored(bytes),
         }
     }
 }

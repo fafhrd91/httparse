@@ -2,6 +2,13 @@
 
 ## [2.3.0] - 2026-10-20
 
+* Use constant-stride AVX2 loops for request targets, header names and values
+
+* Keep response reason scanning vectorized after early obs-text, optimize
+  the ASCII-check tail, and avoid SIMD handoffs at scalar-prefix delimiters
+
+* On runtime-dispatched AVX2, scan short header values directly with SWAR
+
 * Empty response reason phrases consistently use `0..0`, including when
   spaces follow the status code
 
