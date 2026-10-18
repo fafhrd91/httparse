@@ -569,12 +569,14 @@ fn parse_reason(bytes: &mut Bytes<'_, '_>, seen_obs_text: &mut bool) -> Result<S
 
         // A non-empty reason contains only HTAB / SP / VCHAR, so it is
         // ASCII. With obs-text an empty reason is returned instead.
-        return Ok(Status::Complete(if *seen_obs_text {
-            bytes.commit();
-            SlicePos::default()
-        } else {
-            bytes.slice_position(skip)
-        }));
+        let reason = bytes.slice_position(skip);
+        return Ok(Status::Complete(
+            if *seen_obs_text || reason.start == reason.end {
+                SlicePos::default()
+            } else {
+                reason
+            },
+        ));
     }
 }
 
@@ -1758,6 +1760,23 @@ mod tests {
             b"HTTP/1.1\r\n200 OK\r\n",
             b"HTTP/1.1 200 O\x00K\r\n",
         ] {
+            check_split(buf, Response::parse_with_state, Response::parse);
+        }
+    }
+
+    #[test]
+    fn test_response_empty_reason() {
+        for buf in [
+            &b"HTTP/1.1 200\r\n"[..],
+            b"HTTP/1.1 200 \r\n",
+            b"HTTP/1.1 200   \r\n",
+            b"HTTP/1.1 200\n",
+            b"HTTP/1.1 200 \n",
+            b"\r\nHTTP/1.1 200   \n",
+        ] {
+            let mut resp = Response::default();
+            assert_eq!(resp.parse(buf), Ok(Status::Complete(buf.len())));
+            assert_eq!(resp.reason, SlicePos::default());
             check_split(buf, Response::parse_with_state, Response::parse);
         }
     }

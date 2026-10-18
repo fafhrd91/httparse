@@ -2,6 +2,9 @@
 
 ## [2.3.0] - 2026-10-20
 
+* Empty response reason phrases consistently use `0..0`, including when
+  spaces follow the status code
+
 * Disable `simdutf8`'s default features and forward the `std` feature so
   `no_std` builds do not require the standard library
 
