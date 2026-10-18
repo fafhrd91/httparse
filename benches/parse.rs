@@ -123,7 +123,7 @@ fn uri(c: &mut Criterion) {
         c.benchmark_group("uri")
             .throughput(Throughput::Bytes(input.len() as u64))
             .bench_function(name, |b| {
-                b.iter(|| black_box(ntex_httparse::parse_uri(input).unwrap()))
+                b.iter(|| black_box(ntex_httparse::parse_uri(black_box(input)).unwrap().unwrap()))
             });
     }
 

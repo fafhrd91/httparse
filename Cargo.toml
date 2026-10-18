@@ -1,6 +1,6 @@
 [package]
 name = "ntex-httparse"
-version = "2.2.0"
+version = "2.3.0"
 authors = ["Nikolay Kim <fafhrd91@gmail.com>", "Sean McArthur <sean@seanmonstar.com>"]
 license = "MIT OR Apache-2.0"
 description = "A tiny, safe, speedy, zero-copy HTTP/1.x parser."
@@ -10,14 +10,14 @@ readme = "README.md"
 keywords = ["http", "parser", "no_std"]
 categories = ["network-programming", "no-std", "parser-implementations", "web-programming"]
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.97"
 
 [features]
 default = ["std"]
-std = []
+std = ["simdutf8/std"]
 
 [dependencies]
-simdutf8 = "0.1.5"
+simdutf8 = { version = "0.1.5", default-features = false }
 
 [dev-dependencies]
 criterion = { version = "0.3.5", features = ["html_reports"] }

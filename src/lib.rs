@@ -598,7 +598,6 @@ pub fn parse_uri(src: &[u8]) -> Result<&str> {
     let mut st = State::default();
     let mut bytes = Bytes::new(src, &mut st);
     if let Status::Complete(pos) = parse_uri_inner(&mut bytes)? {
-        complete!(utils::skip_spaces(&mut bytes));
         if let Ok(path) = simdutf8::basic::from_utf8(&src[pos.start..pos.end]) {
             Ok(Status::Complete(path))
         } else {
@@ -2253,6 +2252,24 @@ mod tests {
         let mut req = Request::default();
         assert!(req.parse(BUF).unwrap().is_complete());
         assert!(str::from_utf8(&BUF[req.path.start..req.path.end]).is_err());
+    }
+
+    #[test]
+    fn test_parse_uri_delimiter() {
+        for input in [&b"/path "[..], b"/path   ", b"/path HTTP/1.1\r\n"] {
+            assert_eq!(parse_uri(input), Ok(Status::Complete("/path")));
+        }
+        assert_eq!(parse_uri(b"/path"), Ok(Status::Partial));
+    }
+
+    #[test]
+    fn test_parse_uri_utf8() {
+        assert_eq!(
+            parse_uri(b"/caf\xc3\xa9 "),
+            Ok(Status::Complete("/caf\u{e9}"))
+        );
+        assert_eq!(parse_uri(b"/\xff "), Err(Error::Token));
+        assert_eq!(parse_uri(b"/\xc3 "), Err(Error::Token));
     }
 
     #[rustfmt::skip]

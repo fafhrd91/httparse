@@ -1,5 +1,14 @@
 # Changes
 
+## [2.3.0] - 2026-10-20
+
+* Disable `simdutf8`'s default features and forward the `std` feature so
+  `no_std` builds do not require the standard library
+
+* The benchmark-only `parse_uri` completes at the delimiter space and
+  validates UTF-8 even when no bytes follow it; URI benchmarks require a
+  complete result
+
 ## [2.2.0] - 2026-09-28
 
 * Header names longer than 16 bytes are matched with SSE4.2 or AVX2 on x86
