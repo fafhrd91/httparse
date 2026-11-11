@@ -69,6 +69,39 @@ pub unsafe fn match_uri_vectored(bytes: &mut Bytes) {
     super::swar::match_uri_vectored(bytes);
 }
 
+/// Like [`match_uri_vectored`], but also stops at bytes `0x80..=0xFF`, and
+/// at `?` if `Q` is set.
+#[inline]
+#[target_feature(enable = "avx2")]
+pub unsafe fn match_uri_ascii_vectored<const Q: bool>(bytes: &mut Bytes) {
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::*;
+
+    while bytes.as_ref().len() >= 32 {
+        // %x21-%x7e, signed comparison rejects %x80-%xff
+        let dat = _mm256_lddqu_si256(bytes.as_ref().as_ptr() as *const _);
+        let low = _mm256_cmpgt_epi8(dat, _mm256_set1_epi8(0x20));
+        let mut stop = _mm256_cmpeq_epi8(dat, _mm256_set1_epi8(0x7f));
+        if Q {
+            stop = _mm256_or_si256(
+                stop,
+                _mm256_cmpeq_epi8(dat, _mm256_set1_epi8(b'?'.cast_signed())),
+            );
+        }
+        let res = _mm256_movemask_epi8(_mm256_andnot_si256(stop, low)) as u32;
+        let advance = res.trailing_ones() as usize;
+
+        if advance != 32 {
+            bytes.advance(advance);
+            return;
+        }
+        bytes.advance(32);
+    }
+    super::swar::match_uri_ascii_vectored::<Q>(bytes);
+}
+
 #[inline(always)]
 #[allow(non_snake_case, overflowing_literals)]
 #[allow(unused)]

@@ -30,6 +30,32 @@ pub fn match_uri_vectored(bytes: &mut Bytes) {
     }
 }
 
+/// Like [`match_uri_vectored`], but also stops at bytes `0x80..=0xFF`, and
+/// at `?` if `Q` is set.
+#[inline]
+pub fn match_uri_ascii_vectored<const Q: bool>(bytes: &mut Bytes) {
+    loop {
+        if let Some(bytes8) = bytes.peek_n::<BLOCK_SIZE>() {
+            let n = match_uri_ascii_char_8_swar::<Q>(bytes8);
+            // using peek_n to retrieve the bytes ensures that there are at least n more bytes
+            // in `bytes`, so calling `advance(n)` is safe.
+            bytes.advance(n);
+            if n == BLOCK_SIZE {
+                continue;
+            }
+        }
+        if let Some(b) = bytes.peek()
+            && b.is_ascii()
+            && utils::is_uri_token(b)
+            && !(Q && b == b'?')
+        {
+            bytes.advance(1);
+            continue;
+        }
+        break;
+    }
+}
+
 #[inline]
 pub fn match_header_value_vectored(bytes: &mut Bytes) {
     loop {
@@ -140,6 +166,32 @@ fn match_uri_char_8_swar(block: ByteBlock) -> usize {
     let eq_del = xor_del.wrapping_sub(ONE) & !xor_del; // == DEL
 
     offsetnz((lt | eq_del) & M128)
+}
+
+// A byte-wise range-check on an entire word/block,
+// ensuring all bytes in the word satisfy `33 <= (x != 127) <= 126`, and
+// `x != '?'` if `Q` is set
+#[inline]
+fn match_uri_ascii_char_8_swar<const Q: bool>(block: ByteBlock) -> usize {
+    const BM: usize = uniform_block(0x21);
+    const ONE: usize = uniform_block(0x01);
+    const DEL: usize = uniform_block(0x7f);
+    const QM: usize = uniform_block(b'?');
+    const M128: usize = uniform_block(128);
+
+    let x = usize::from_ne_bytes(block);
+    let lt = x.wrapping_sub(BM) & !x; // <= m
+
+    let xor_del = x ^ DEL;
+    let eq_del = xor_del.wrapping_sub(ONE) & !xor_del; // == DEL
+
+    // `x` itself marks bytes >= 128
+    let mut stop = lt | eq_del | x;
+    if Q {
+        let xor_q = x ^ QM;
+        stop |= xor_q.wrapping_sub(ONE) & !xor_q; // == '?'
+    }
+    offsetnz(stop & M128)
 }
 
 // A byte-wise range-check on an entire word/block,

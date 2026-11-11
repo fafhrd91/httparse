@@ -50,6 +50,24 @@ pub fn match_uri_vectored(bytes: &mut Bytes) {
     super::swar::match_uri_vectored(bytes);
 }
 
+/// Like [`match_uri_vectored`], but also stops at bytes `0x80..=0xFF`, and
+/// at `?` if `Q` is set.
+#[inline]
+pub fn match_uri_ascii_vectored<const Q: bool>(bytes: &mut Bytes) {
+    while bytes.as_ref().len() >= 16 {
+        // SAFETY: ensured that there are at least 16 bytes remaining
+        unsafe {
+            let advance = match_url_ascii_char_16_neon::<Q>(bytes.as_ref().as_ptr());
+            bytes.advance(advance);
+
+            if advance != 16 {
+                return;
+            }
+        }
+    }
+    super::swar::match_uri_ascii_vectored::<Q>(bytes);
+}
+
 const fn bit_set(x: u8) -> bool {
     // Validates if a byte is a valid header name character
     // https://tools.ietf.org/html/rfc7230#section-3.2.6
@@ -132,6 +150,24 @@ unsafe fn match_url_char_16_neon(ptr: *const u8) -> usize {
     // Disallow del
     let del = vceqq_u8(input, vdupq_n_u8(0x7F));
     let result = vbicq_u8(result, del);
+
+    offsetz(result) as usize
+}
+
+#[inline]
+unsafe fn match_url_ascii_char_16_neon<const Q: bool>(ptr: *const u8) -> usize {
+    let input = vld1q_u8(ptr);
+
+    // %x21-%x7e
+    let result = vandq_u8(
+        vcgtq_u8(input, vdupq_n_u8(0x20)),
+        vcltq_u8(input, vdupq_n_u8(0x7F)),
+    );
+    let result = if Q {
+        vbicq_u8(result, vceqq_u8(input, vdupq_n_u8(b'?')))
+    } else {
+        result
+    };
 
     offsetz(result) as usize
 }

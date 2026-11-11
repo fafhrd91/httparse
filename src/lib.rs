@@ -261,6 +261,12 @@ pub struct Request {
     /// Request target. May contain bytes `0x80..=0xFF`, so it is not
     /// guaranteed to be UTF-8.
     pub path: SlicePos,
+    /// `true` if the request target contains only ASCII bytes, so it is valid
+    /// UTF-8 and needs no further UTF-8 check.
+    pub path_ascii: bool,
+    /// Position of the first `?` in the request target, an index into the
+    /// parsed buffer like `path`, `None` if the target has no query.
+    pub query: Option<usize>,
     /// HTTP version, `0` for HTTP/1.0 and `1` for HTTP/1.1.
     pub version: u8,
 }
@@ -310,10 +316,16 @@ impl Request {
         }
         if bytes.st.state == SPACES_BEFORE_URI {
             complete!(utils::skip_spaces(&mut bytes));
+            self.path_ascii = true;
+            self.query = None;
             bytes.st.state = URI;
         }
         if bytes.st.state == URI {
-            self.path = complete!(parse_uri_inner(&mut bytes));
+            self.path = complete!(parse_target_inner(
+                &mut bytes,
+                &mut self.query,
+                &mut self.path_ascii
+            ));
             bytes.st.state = SPACES_BEFORE_VERSION;
         }
         if bytes.st.state == SPACES_BEFORE_VERSION {
@@ -635,6 +647,61 @@ fn parse_uri_inner(bytes: &mut Bytes<'_, '_>) -> Result<SlicePos> {
 
         // URI bytes may include 0x80..=0xFF, so they are not guaranteed to be UTF-8
         let end = bytes.cursor() - 1;
+        bytes.commit();
+        Ok(Status::Complete(SlicePos { start, end }))
+    } else {
+        Err(Error::Token)
+    }
+}
+
+/// Parses a request target like [`parse_uri_inner`], and records whether it
+/// is ASCII and where its query starts.
+///
+/// `ascii` and `query` must be `true` and `None` when the target starts, and
+/// are kept between `Partial` results, so a resumed scan does not start over.
+#[inline]
+fn parse_target_inner(
+    bytes: &mut Bytes<'_, '_>,
+    query: &mut Option<usize>,
+    ascii: &mut bool,
+) -> Result<SlicePos> {
+    let start = bytes.start();
+    // the ASCII scans stop at the first `?` and the first high byte, a
+    // non-ASCII target is finished with the plain scan
+    loop {
+        if !*ascii {
+            simd::match_uri_vectored(bytes);
+            break;
+        }
+        if query.is_none() {
+            simd::match_uri_ascii_vectored::<true>(bytes);
+        } else {
+            simd::match_uri_ascii_vectored::<false>(bytes);
+        }
+        match bytes.peek() {
+            Some(b'?') if query.is_none() => {
+                *query = Some(bytes.cursor());
+                bytes.advance(1);
+            }
+            Some(b) if b >= 0x80 => *ascii = false,
+            _ => break,
+        }
+    }
+    let end = bytes.cursor();
+
+    if next!(bytes) == b' ' {
+        // URI must have at least one char
+        if start == end {
+            return Err(Error::Token);
+        }
+        // the plain scan does not stop at `?`
+        if !*ascii && query.is_none() {
+            *query = bytes
+                .since(start)
+                .iter()
+                .position(|&b| b == b'?')
+                .map(|i| start + i);
+        }
         bytes.commit();
         Ok(Status::Complete(SlicePos { start, end }))
     } else {
@@ -2327,6 +2394,111 @@ mod tests {
         let mut req = Request::default();
         assert!(req.parse(BUF).unwrap().is_complete());
         assert!(str::from_utf8(&BUF[req.path.start..req.path.end]).is_err());
+    }
+
+    /// STATEMENT: `Request::path_ascii` reports whether the request target is
+    /// pure ASCII, including targets completed across `Partial` results.
+    ///
+    /// HOW:
+    /// - Parse ASCII targets shorter and longer than a SIMD block and check the
+    ///   flag is set.
+    /// - Parse targets with a high byte at the start, middle and end, and check
+    ///   the flag is cleared even when the request reuses a previous `Request`.
+    /// - Feed a non-ASCII target in two pieces through `parse_with_state` and
+    ///   check the flag once the line completes.
+    #[test]
+    fn test_path_ascii() {
+        let long = "/a".repeat(40);
+        let mut req = Request::default();
+        for path in ["/", "/baseline11?a=13&b=42", long.as_str()] {
+            let buf = format!("GET {path} HTTP/1.1\r\n");
+            assert!(req.parse(buf.as_bytes()).unwrap().is_complete());
+            assert!(req.path_ascii, "{path}");
+        }
+
+        let long = [b"/".repeat(40), b"\xC3\xA9".to_vec(), b"/".repeat(40)].concat();
+        for path in [&b"/\xC3\xA9"[..], b"\xFF/a?b", b"/a?b=\x80", &long] {
+            req.path_ascii = true;
+            let buf = [b"GET ", path, b" HTTP/1.1\r\n"].concat();
+            assert!(req.parse(&buf).unwrap().is_complete());
+            assert!(!req.path_ascii, "{path:?}");
+        }
+
+        const BUF: &[u8] = b"GET /caf\xC3\xA9?q=1 HTTP/1.1\r\n";
+        let mut req = Request {
+            path_ascii: true,
+            ..Request::default()
+        };
+        let mut st = State::default();
+        assert_eq!(
+            req.parse_with_state(&BUF[..9], &mut st),
+            Ok(Status::Partial)
+        );
+        assert!(req.parse_with_state(BUF, &mut st).unwrap().is_complete());
+        assert!(!req.path_ascii);
+        assert_eq!(&BUF[req.path.start..req.path.end], b"/caf\xC3\xA9?q=1");
+    }
+
+    /// STATEMENT: `Request::query` is the position of the first `?` of the
+    /// request target, for ASCII and non-ASCII targets, whole or resumed.
+    ///
+    /// HOW:
+    /// - Parse targets with no `?`, one or two `?` at offsets around the SIMD
+    ///   block sizes, and high bytes before or after the `?`, reusing one
+    ///   `Request`, and compare `query` and `path_ascii` with a scalar search.
+    /// - Feed each request through `parse_with_state` one prefix length at a
+    ///   time and check the completed result matches the one-shot parse.
+    #[test]
+    fn test_request_query() {
+        let mut targets: Vec<Vec<u8>> = vec![
+            b"/".to_vec(),
+            b"?".to_vec(),
+            b"/a?".to_vec(),
+            b"/a?b?c".to_vec(),
+            b"/\xC3\xA9?q=1".to_vec(),
+            b"/q?\xC3\xA9".to_vec(),
+            b"/\xC3\xA9/no-query".to_vec(),
+            b"/baseline11?a=13&b=42".to_vec(),
+        ];
+        for pos in [1, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65] {
+            let mut t = vec![b'/'; 70];
+            t[pos] = b'?';
+            targets.push(t.clone());
+            t[pos + 3] = b'?';
+            targets.push(t.clone());
+            t[pos / 2] = 0x80;
+            targets.push(t);
+        }
+
+        let mut req = Request::default();
+        for target in &targets {
+            let buf = [b"GET ", &target[..], b" HTTP/1.1\r\n"].concat();
+            let query = target.iter().position(|&b| b == b'?').map(|i| i + 4);
+            let ascii = target.is_ascii();
+
+            assert!(req.parse(&buf).unwrap().is_complete());
+            assert_eq!(&buf[req.path.start..req.path.end], &target[..]);
+            assert_eq!(req.query, query, "{target:?}");
+            assert_eq!(req.path_ascii, ascii, "{target:?}");
+
+            let mut resumed = Request::default();
+            let mut st = State::default();
+            for n in 1..buf.len() {
+                assert_eq!(
+                    resumed.parse_with_state(&buf[..n], &mut st),
+                    Ok(Status::Partial)
+                );
+            }
+            assert!(
+                resumed
+                    .parse_with_state(&buf, &mut st)
+                    .unwrap()
+                    .is_complete()
+            );
+            assert_eq!(resumed.path, req.path);
+            assert_eq!(resumed.query, query, "resumed {target:?}");
+            assert_eq!(resumed.path_ascii, ascii, "resumed {target:?}");
+        }
     }
 
     #[test]

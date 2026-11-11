@@ -56,6 +56,17 @@ pub fn match_uri_vectored(bytes: &mut Bytes) {
     }
 }
 
+pub fn match_uri_ascii_vectored<const Q: bool>(bytes: &mut Bytes) {
+    // SAFETY: calls are guarded by a feature check
+    unsafe {
+        match get_runtime_feature() {
+            AVX2 => avx2::match_uri_ascii_vectored::<Q>(bytes),
+            SSE42 => sse42::match_uri_ascii_vectored::<Q>(bytes),
+            _ /* NOP */ => super::swar::match_uri_ascii_vectored::<Q>(bytes),
+        }
+    }
+}
+
 pub fn match_header_value_vectored(bytes: &mut Bytes) {
     // SAFETY: calls are guarded by a feature check
     unsafe {
