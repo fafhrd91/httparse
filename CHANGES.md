@@ -1,5 +1,13 @@
 # Changes
 
+## [2.4.0] - 2026-11-12
+
+* Add `Request::path_ascii`, set when the request target is pure ASCII, so
+  callers can skip UTF-8 validation of the target
+
+* Add `Request::query`, the position of the first `?` of the request target,
+  found by the same SIMD scan as the target
+
 ## [2.3.0] - 2026-10-20
 
 * Use constant-stride AVX2 loops for request targets, header names and values

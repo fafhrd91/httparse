@@ -79,6 +79,43 @@ unsafe fn match_url_char_16_sse(buf: &[u8]) -> usize {
     res.trailing_ones() as usize
 }
 
+/// Like [`match_uri_vectored`], but also stops at bytes `0x80..=0xFF`, and
+/// at `?` if `Q` is set.
+#[target_feature(enable = "sse4.2")]
+pub unsafe fn match_uri_ascii_vectored<const Q: bool>(bytes: &mut Bytes) {
+    while bytes.as_ref().len() >= 16 {
+        let advance = match_url_ascii_char_16_sse::<Q>(bytes.as_ref());
+        bytes.advance(advance);
+
+        if advance != 16 {
+            return;
+        }
+    }
+    super::swar::match_uri_ascii_vectored::<Q>(bytes);
+}
+
+#[inline(always)]
+#[allow(non_snake_case)]
+unsafe fn match_url_ascii_char_16_sse<const Q: bool>(buf: &[u8]) -> usize {
+    debug_assert!(buf.len() >= 16);
+
+    #[cfg(target_arch = "x86")]
+    use core::arch::x86::*;
+    #[cfg(target_arch = "x86_64")]
+    use core::arch::x86_64::*;
+
+    // %x21-%x7e, signed comparison rejects %x80-%xff
+    let dat = _mm_lddqu_si128(buf.as_ptr() as *const _);
+    let low = _mm_cmpgt_epi8(dat, _mm_set1_epi8(0x20));
+    let mut stop = _mm_cmpeq_epi8(dat, _mm_set1_epi8(0x7f));
+    if Q {
+        stop = _mm_or_si128(stop, _mm_cmpeq_epi8(dat, _mm_set1_epi8(b'?'.cast_signed())));
+    }
+    let res = _mm_movemask_epi8(_mm_andnot_si128(stop, low)) as u16;
+
+    res.trailing_ones() as usize
+}
+
 #[target_feature(enable = "sse4.2")]
 pub unsafe fn match_header_value_vectored(bytes: &mut Bytes) {
     while bytes.as_ref().len() >= 16 {
